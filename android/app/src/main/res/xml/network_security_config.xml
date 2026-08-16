@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext is allowed so the app can reach a marusic dev server on the
+     LAN (http://192.168.x.x:3000). Production use goes through the HTTPS
+     Cloudflare tunnel hostname, which this config does not weaken. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

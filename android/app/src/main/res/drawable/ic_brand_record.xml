@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The .brand-record SVG from public/index.html, 1:1. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:fillColor="#FF0B0B0D"
+        android:pathData="M0.5,12 a11.5,11.5 0 1,0 23,0 a11.5,11.5 0 1,0 -23,0" />
+
+    <path
+        android:strokeWidth="1"
+        android:pathData="M0.5,12 a11.5,11.5 0 1,0 23,0 a11.5,11.5 0 1,0 -23,0">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="0"
+                android:endX="24" android:endY="24"
+                android:startColor="#FF1ED760"
+                android:centerColor="#FF00C8FF"
+                android:endColor="#FFC45CFF" />
+        </aapt:attr>
+    </path>
+
+    <path android:strokeColor="#2BFFFFFF" android:strokeWidth="0.5"
+        android:pathData="M3,12 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+    <path android:strokeColor="#2BFFFFFF" android:strokeWidth="0.5"
+        android:pathData="M4.8,12 a7.2,7.2 0 1,0 14.4,0 a7.2,7.2 0 1,0 -14.4,0" />
+    <path android:strokeColor="#2BFFFFFF" android:strokeWidth="0.5"
+        android:pathData="M6.6,12 a5.4,5.4 0 1,0 10.8,0 a5.4,5.4 0 1,0 -10.8,0" />
+
+    <path android:pathData="M7.6,12 a4.4,4.4 0 1,0 8.8,0 a4.4,4.4 0 1,0 -8.8,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="7.6" android:startY="7.6"
+                android:endX="16.4" android:endY="16.4"
+                android:startColor="#FF1ED760"
+                android:centerColor="#FF00C8FF"
+                android:endColor="#FFC45CFF" />
+        </aapt:attr>
+    </path>
+
+    <path
+        android:strokeColor="#FF0B0B0D"
+        android:strokeWidth="1.25"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M9.6,14.4 L9.6,9.6 L12,12.5 L14.4,9.6 L14.4,14.4" />
+</vector>

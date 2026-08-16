@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "marusic",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--experimental-sqlite", "server.js"],
+      "port": 3000
+    },
+    {
+      "name": "marusic-3100",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set PORT=3100&& node --experimental-sqlite server.js"],
+      "port": 3100
+    }
+  ]
+}

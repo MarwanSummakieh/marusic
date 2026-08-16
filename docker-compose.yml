@@ -1,0 +1,34 @@
+# Marusic behind a Cloudflare tunnel — designed for a NAS.
+#
+#   1. cp .env.example .env   and fill in ADMIN_*, TUNNEL_TOKEN
+#   2. docker compose up -d --build
+#   3. In Cloudflare Zero Trust → Networks → Tunnels, point the tunnel's
+#      public hostname at  http://marusic:3000  (service URL, not localhost —
+#      cloudflared reaches the app over the compose network).
+#
+# Compose reads ${VARS} from the .env file in this directory; the real .env is
+# gitignored, so the tunnel token and admin password never land in the repo.
+services:
+  marusic:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      # All requests arrive from cloudflared's IP; without this the login
+      # rate limiter would throttle every user as one client.
+      TRUST_PROXY: "1"
+      LOSSLESS_API_BASE: ${LOSSLESS_API_BASE:-}
+    volumes:
+      - marusic-data:/app/data
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run --token ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
+    depends_on:
+      - marusic
+
+volumes:
+  marusic-data:

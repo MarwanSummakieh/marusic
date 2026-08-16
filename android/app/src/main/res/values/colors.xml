@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- matches the web app CSS variables: bg #000, accent #1db954 -->
+    <color name="marusic_background">#FF000000</color>
+    <!-- launcher background = the record's disc color so round masks blend -->
+    <color name="ic_launcher_background">#FF0B0B0D</color>
+</resources>

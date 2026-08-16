@@ -1,0 +1,17 @@
+node_modules/
+data/
+.env
+.claude/settings.local.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Android app (android/ has its own .gitignore too)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+android/keystore/
+android/keystore.properties

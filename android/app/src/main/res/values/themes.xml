@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose draws everything; this only styles the window before the
+         first frame. Platform theme, so no appcompat dependency is needed. -->
+    <style name="Theme.Marusic" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/marusic_background</item>
+        <item name="android:statusBarColor">@color/marusic_background</item>
+        <item name="android:navigationBarColor">@color/marusic_background</item>
+    </style>
+</resources>

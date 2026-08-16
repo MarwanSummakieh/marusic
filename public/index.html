@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Marusic</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%231ed760'/%3E%3Cstop offset='.5' stop-color='%2300c8ff'/%3E%3Cstop offset='1' stop-color='%23c45cff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='12' cy='12' r='12' fill='%230b0b0d'/%3E%3Ccircle cx='12' cy='12' r='8.5' fill='none' stroke='%23ffffff' stroke-opacity='.15' stroke-width='.7'/%3E%3Ccircle cx='12' cy='12' r='5' fill='url(%23g)'/%3E%3Cpath d='M9.4 14.6V9.4L12 12.6 14.6 9.4V14.6' fill='none' stroke='%230b0b0d' stroke-width='1.4' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#121212">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/styles.css?v=25">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="logo" href="#/home">
+        <svg class="brand-record" viewBox="0 0 24 24" width="36" height="36"><defs><linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1ed760"/><stop offset=".5" stop-color="#00c8ff"/><stop offset="1" stop-color="#c45cff"/></linearGradient></defs><circle cx="12" cy="12" r="11.5" fill="#0b0b0d"/><circle cx="12" cy="12" r="11.5" fill="none" stroke="url(#logo-grad)" stroke-width="1"/><circle cx="12" cy="12" r="9" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width=".5"/><circle cx="12" cy="12" r="7.2" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width=".5"/><circle cx="12" cy="12" r="5.4" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width=".5"/><circle cx="12" cy="12" r="4.4" fill="url(#logo-grad)"/><path d="M9.6 14.4V9.6L12 12.5 14.4 9.6V14.4" fill="none" stroke="#0b0b0d" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round"/></svg>
+        <span>Marusic</span>
+      </a>
+
+      <!-- Home/Search/Discover/Library/Profile now live in the top tab bar; the
+           sidebar keeps only what the tabs don't cover. -->
+      <nav class="nav">
+        <a href="#/radio" data-nav="radio"><span class="nav-icon" data-icon="radio"></span><span class="nav-label">Radio</span></a>
+        <a href="#/jam" data-nav="jam"><span class="nav-icon" data-icon="group"></span><span class="nav-label">Jam</span></a>
+      </nav>
+
+      <div class="library">
+        <div class="library-head">
+          <span class="library-title"><span class="nav-icon" data-icon="library"></span><span class="nav-label">Your Library</span></span>
+          <span class="library-actions">
+            <button id="btn-lib-full" class="icon-btn" title="Open the full-page library" data-icon="expand"></button>
+            <button id="btn-import-playlist" class="icon-btn" title="Import playlist (.json)" data-icon="upload"></button>
+            <button id="btn-new-playlist" class="icon-btn" title="Create playlist" data-icon="plus"></button>
+          </span>
+        </div>
+        <div class="library-scroll">
+          <a class="lib-item liked-link" href="#/liked" data-nav="liked">
+            <span class="liked-cover" data-icon="heartFill"></span>
+            <span class="lib-meta nav-label"><span class="lib-name">Liked Songs</span><span class="lib-sub" id="liked-count">Playlist</span></span>
+          </a>
+          <a class="lib-item saves-link" href="#/saves" data-nav="saves">
+            <span class="saves-cover" data-icon="bookmarkFill"></span>
+            <span class="lib-meta nav-label"><span class="lib-name">Saves</span><span class="lib-sub" id="saves-count">Listen later</span></span>
+          </a>
+          <div id="sidebar-smart"></div>
+          <ul id="playlist-list"></ul>
+          <div id="sidebar-albums"></div>
+          <div id="sidebar-artists"></div>
+        </div>
+        <input type="file" id="import-file" accept=".json,application/json" hidden>
+      </div>
+    </aside>
+
+    <main class="main" id="main">
+      <header class="topbar">
+        <a class="topbar-brand" id="topbar-brand" href="#/home">
+          <svg class="brand-record" viewBox="0 0 24 24" width="28" height="28"><defs><linearGradient id="logo-grad-m" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1ed760"/><stop offset=".5" stop-color="#00c8ff"/><stop offset="1" stop-color="#c45cff"/></linearGradient></defs><circle cx="12" cy="12" r="11.5" fill="#0b0b0d"/><circle cx="12" cy="12" r="11.5" fill="none" stroke="url(#logo-grad-m)" stroke-width="1"/><circle cx="12" cy="12" r="9" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width=".5"/><circle cx="12" cy="12" r="7.2" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width=".5"/><circle cx="12" cy="12" r="4.4" fill="url(#logo-grad-m)"/><path d="M9.6 14.4V9.6L12 12.5 14.4 9.6V14.4" fill="none" stroke="#0b0b0d" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round"/></svg>
+          <span>Marusic</span>
+        </a>
+        <div class="nav-arrows">
+          <button id="btn-back" class="circle-btn" title="Go back" data-icon="chevronLeft"></button>
+          <button id="btn-fwd" class="circle-btn" title="Go forward" data-icon="chevronRight"></button>
+        </div>
+
+        <!-- top-level tabs: the only way to move between sections on desktop -->
+        <nav class="top-tabs" id="top-tabs">
+          <a href="#/home" data-nav="home" title="Home"><span class="tt-icon" data-icon="home"></span><span class="tt-label">Home</span></a>
+          <a href="#/search" data-nav="search" title="Search"><span class="tt-icon" data-icon="search"></span><span class="tt-label">Search</span></a>
+          <a href="#/discover" data-nav="discover" title="Discover"><span class="tt-icon" data-icon="sparkle"></span><span class="tt-label">Discover</span></a>
+          <a href="#/profile" data-nav="profile" title="Profile"><span class="tt-icon" data-icon="person"></span><span class="tt-label">Profile</span></a>
+        </nav>
+
+        <!-- Desktop: always ready, on every route. On phones this same element
+             is moved down into #phone-search below, off the header. -->
+        <div class="topbar-search" id="topbar-search">
+          <span data-icon="search"></span>
+          <input id="search-input" placeholder="What do you want to listen to?" autocomplete="off" spellcheck="false">
+          <button id="search-clear" class="icon-btn hidden" title="Clear" data-icon="close"></button>
+        </div>
+        <a id="jam-chip" class="jam-chip hidden" href="#/jam" title="Open the jam"></a>
+        <button id="user-chip" class="user-chip hidden" title="Account"></button>
+      </header>
+
+      <!-- desktop only: several pages open side by side, like browser tabs -->
+      <div class="page-tabs hidden" id="page-tabs"></div>
+
+      <!-- Phone home for the search field. It sits outside #view on purpose:
+           the results re-render on every keystroke, and a field inside #view
+           would be destroyed mid-word. -->
+      <div class="phone-search hidden" id="phone-search"></div>
+
+      <section id="view" class="view"></section>
+    </main>
+
+    <aside class="queue-panel hidden" id="queue-panel">
+      <div class="queue-head">
+        <h3 id="queue-title">Queue</h3>
+        <span class="queue-head-actions">
+          <button id="btn-autoplay" class="pill-toggle" title="Keep playing similar songs when the queue ends">Autoplay</button>
+          <button id="btn-queue-close" class="icon-btn" data-icon="close"></button>
+        </span>
+      </div>
+      <div id="queue-list" class="queue-list"></div>
+    </aside>
+
+    <aside class="queue-panel hidden" id="lyrics-panel">
+      <div class="queue-head">
+        <h3>Lyrics</h3>
+        <button id="btn-lyrics-close" class="icon-btn" data-icon="close"></button>
+      </div>
+      <div id="lyrics-body" class="queue-list"></div>
+    </aside>
+
+    <!-- full-screen Now Playing sheet (phones: tap the mini player) -->
+    <section class="np-sheet" id="np-sheet" aria-label="Now playing">
+      <div class="np-sheet-head" id="np-sheet-head">
+        <button id="np-sheet-close" class="icon-btn" title="Close" data-icon="chevronDown"></button>
+        <span class="np-sheet-label" id="np-sheet-label">Now playing</span>
+        <button id="np2-download" class="icon-btn" title="Download" data-icon="download"></button>
+      </div>
+      <div class="np2-art" id="np2-art">
+        <img id="np2-image" alt="" class="hidden">
+        <div id="np2-art-placeholder" class="np2-art-placeholder" data-icon="note"></div>
+      </div>
+      <div class="np2-meta">
+        <div class="np2-text">
+          <div id="np2-title" class="np2-title"></div>
+          <div id="np2-artist" class="np2-artist"></div>
+        </div>
+        <button id="np2-like" class="icon-btn like-btn" title="Save to Liked Songs"></button>
+      </div>
+      <div class="np2-progress">
+        <div class="progress-bar" id="np2-progress-bar">
+          <div class="progress-track">
+            <div class="progress-fill" id="np2-progress-fill"></div>
+            <div class="progress-knob" id="np2-progress-knob"></div>
+          </div>
+        </div>
+        <div class="np2-times"><span id="np2-time-cur">0:00</span><span id="np2-time-dur">0:00</span></div>
+      </div>
+      <div class="np2-controls">
+        <button id="np2-shuffle" class="icon-btn" title="Shuffle" data-icon="shuffle"></button>
+        <button id="np2-prev" class="icon-btn" title="Previous" data-icon="prev"></button>
+        <button id="np2-play" class="np2-play" title="Play"></button>
+        <button id="np2-next" class="icon-btn" title="Next" data-icon="next"></button>
+        <button id="np2-repeat" class="icon-btn" title="Repeat" data-icon="repeat"></button>
+      </div>
+      <!-- Queue and lyrics open *into* the sheet from here rather than throwing
+           you into a side panel, so both stay inside one-handed thumb reach. -->
+      <div class="np2-actions">
+        <button id="np2-lyrics" class="np2-action" title="Lyrics"><span data-icon="mic"></span>Lyrics</button>
+        <button id="np2-queue" class="np2-action" title="Queue"><span data-icon="queue"></span>Queue</button>
+        <button id="np2-jam" class="np2-action" title="Jam"><span data-icon="group"></span>Jam</button>
+        <button id="np2-cast" class="np2-action cast-nodevices" title="Cast"><span data-icon="cast"></span>Cast</button>
+      </div>
+      <div class="np2-drawer" id="np2-drawer" hidden>
+        <div class="np2-drawer-head">
+          <span id="np2-drawer-title">Queue</span>
+          <button id="np2-drawer-close" class="icon-btn" title="Close" data-icon="chevronDown"></button>
+        </div>
+        <div class="np2-drawer-body" id="np2-drawer-body"></div>
+      </div>
+    </section>
+
+    <!-- press-and-hold on the mini player: quick actions without expanding it -->
+    <div class="hold-sheet hidden" id="hold-sheet">
+      <div class="hold-card" id="hold-card"></div>
+    </div>
+
+    <!-- shown when the browser blocks un-gestured jam playback -->
+    <button id="jam-resume" class="jam-resume hidden">
+      <span data-icon="play"></span> Tap to listen with the jam
+    </button>
+
+    <!-- AI DJ lives beside the player, not buried in the playlist library, and
+         every control it has is explicit. -->
+    <div class="dj-dock hidden" id="dj-dock">
+      <button class="dj-face" id="dj-face" title="DJ">
+        <span data-icon="sparkle"></span>
+      </button>
+      <div class="dj-body">
+        <div class="dj-line" id="dj-line">DJ is off</div>
+        <div class="dj-controls">
+          <button id="dj-toggle" class="dj-btn">Turn on</button>
+          <button id="dj-skip" class="dj-btn" title="Skip this commentary">Skip talk</button>
+          <button id="dj-up" class="dj-btn icon-only" title="More like this" data-icon="thumbUp"></button>
+          <button id="dj-down" class="dj-btn icon-only" title="Less like this" data-icon="thumbDown"></button>
+        </div>
+      </div>
+      <button id="dj-close" class="icon-btn dj-close" title="Hide the DJ" data-icon="close"></button>
+    </div>
+
+    <footer class="player is-idle">
+      <div class="player-left">
+        <div id="np-idle" class="np-idle">
+          <span class="np-idle-icon" data-icon="note"></span>
+          <span>Not playing</span>
+        </div>
+        <img id="np-image" class="np-image hidden" alt="">
+        <div class="np-meta">
+          <div id="np-title" class="np-title"></div>
+          <div id="np-artist" class="np-artist"></div>
+        </div>
+        <!-- Like is the one action worth a permanent button; the rest live one
+             click deeper so the track info isn't fenced in by icons. -->
+        <span class="np-actions">
+          <button id="btn-like" class="icon-btn like-btn hidden" title="Add to Liked Songs"></button>
+          <button id="btn-track-menu" class="icon-btn hidden" title="More for this track" data-icon="more"></button>
+        </span>
+      </div>
+
+      <div class="player-center">
+        <div class="player-controls">
+          <button id="btn-shuffle" class="icon-btn" title="Shuffle" data-icon="shuffle"></button>
+          <button id="btn-prev" class="icon-btn" title="Previous" data-icon="prev"></button>
+          <button id="btn-play" class="play-btn" title="Play"></button>
+          <button id="btn-next" class="icon-btn" title="Next" data-icon="next"></button>
+          <button id="btn-repeat" class="icon-btn" title="Repeat" data-icon="repeat"></button>
+        </div>
+        <div class="progress-row">
+          <span id="time-cur" class="time">0:00</span>
+          <div class="progress-bar" id="progress-bar">
+            <div class="progress-track">
+              <div class="progress-fill" id="progress-fill"></div>
+              <div class="progress-knob" id="progress-knob"></div>
+            </div>
+          </div>
+          <span id="time-dur" class="time">0:00</span>
+        </div>
+      </div>
+
+      <!-- Grouped: what you're listening through, then what you're looking at,
+           then how loud. Audio quality moved to Profile › Settings, where it
+           sits with the other playback preferences. -->
+      <div class="player-right">
+        <span class="pr-group">
+          <button id="btn-download" class="icon-btn hidden" title="Download FLAC" data-icon="download"></button>
+          <button id="btn-cast" class="icon-btn cast-nodevices" title="Play on another device" data-icon="cast"></button>
+        </span>
+        <span class="pr-group">
+          <button id="btn-lyrics" class="icon-btn" title="Lyrics" data-icon="mic"></button>
+          <button id="btn-queue" class="icon-btn" title="Queue" data-icon="queue"></button>
+        </span>
+        <span class="pr-group pr-volume">
+          <button id="btn-mute" class="icon-btn" title="Mute"></button>
+          <input type="range" id="volume" class="volume" min="0" max="100" value="80" title="Volume">
+        </span>
+      </div>
+    </footer>
+
+    <nav class="mobile-nav" id="mobile-nav">
+      <a href="#/home" data-mnav="home"><span class="mnav-icon" data-icon="home"></span><span class="mnav-label">Home</span></a>
+      <a href="#/search" data-mnav="search"><span class="mnav-icon" data-icon="search"></span><span class="mnav-label">Search</span></a>
+      <a href="#/discover" data-mnav="discover"><span class="mnav-icon" data-icon="sparkle"></span><span class="mnav-label">Discover</span></a>
+      <a href="#/library" data-mnav="library"><span class="mnav-icon" data-icon="library"></span><span class="mnav-label">Library</span></a>
+      <a href="#/profile" data-mnav="profile"><span class="mnav-icon" data-icon="person"></span><span class="mnav-label">Profile</span></a>
+    </nav>
+  </div>
+
+  <div id="toast-wrap" class="toast-wrap"></div>
+  <div id="popover" class="popover hidden"></div>
+
+  <dialog id="modal" class="modal">
+    <form method="dialog" id="modal-form">
+      <h3 id="modal-title">Create playlist</h3>
+      <input id="modal-input" placeholder="Playlist name" autocomplete="off" maxlength="60">
+      <div class="modal-actions">
+        <button type="button" id="modal-cancel" class="btn-ghost">Cancel</button>
+        <button type="submit" id="modal-save" class="btn-solid">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- lightweight lyrics pop-up: time-synced, resizable, translatable -->
+  <dialog id="lyrics-pop" class="lyrics-pop">
+    <div class="lp-head">
+      <div class="lp-meta">
+        <div class="lp-title" id="lp-title"></div>
+        <div class="lp-artist" id="lp-artist"></div>
+      </div>
+      <div class="lp-tools">
+        <button id="lp-smaller" class="icon-btn" title="Smaller text">A−</button>
+        <button id="lp-bigger" class="icon-btn" title="Bigger text">A+</button>
+        <button id="lp-translate" class="icon-btn" title="Translate">文</button>
+        <button id="lp-page" class="icon-btn" title="Open the full lyrics page" data-icon="expand"></button>
+        <button id="lp-close" class="icon-btn" title="Close" data-icon="close"></button>
+      </div>
+    </div>
+    <div class="lp-body" id="lp-body"></div>
+    <div class="lp-foot">
+      <label class="lp-sync"><input type="checkbox" id="lp-follow" checked> Follow along</label>
+      <span class="lp-note" id="lp-note"></span>
+    </div>
+  </dialog>
+
+  <dialog id="pw-modal" class="modal">
+    <form id="pw-form">
+      <h3>Change password</h3>
+      <input id="pw-current" type="password" placeholder="Current password" autocomplete="current-password" required>
+      <input id="pw-new" type="password" placeholder="New password" autocomplete="new-password" required>
+      <div class="auth-err" id="pw-err"></div>
+      <div class="modal-actions">
+        <button type="button" id="pw-cancel" class="btn-ghost">Cancel</button>
+        <button type="submit" class="btn-solid">Change</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js?v=25"></script>
+  <!-- Google Cast sender SDK — after app.js so __onGCastApiAvailable exists.
+       Loading it in a non-Cast browser (or offline) is a harmless no-op. -->
+  <script src="https://www.gstatic.com/cast/sdk/libs/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+</body>
+</html>

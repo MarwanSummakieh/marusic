@@ -1,0 +1,12 @@
+node_modules
+data
+.env
+.git
+.github
+.claude
+tests
+android
+Dockerfile
+.dockerignore
+docker-compose.yml
+README.md
