@@ -279,6 +279,55 @@ test("speaker: only the speaker device advances, transfer works, presence tracke
   assert.equal(jams.markEnded(open, 0), true);
 });
 
+test("mode: defaults to a jam, normalizes junk, rides the wire payloads", () => {
+  const plain = jams.createJam(user("H"), {});
+  assert.equal(plain.mode, "speaker");
+  assert.equal(jams.createJam(user("H2"), {}, "", "nonsense").mode, "speaker");
+  assert.equal(jams.createJam(user("H3"), {}, "", "together").mode, "together");
+
+  const t = jams.createJam(user("H4"), { queue: [song("a")], index: 0 }, "", "together");
+  const guest = user("G");
+  jams.joinJam(guest, t.code);
+  assert.equal(jams.snapshot(t, guest.id).mode, "together");
+  assert.equal(jams.peekJam(t.code).mode, "together");
+  const ears = listen(t, guest);
+  jams.setJamSettings(t, { autoplay: false }); // any members broadcast carries it
+  jams.joinJam(user("G2"), t.code);
+  assert.equal(ears.last("members").data.mode, "together");
+});
+
+test("mode: listen together has no speaker device and can't be given one", () => {
+  // the creating device is the speaker in a jam, but never in listen together
+  const t = jams.createJam(user("H"), {}, "device-A", "together");
+  assert.equal(t.speakerId, "");
+  assert.equal(jams.speakerOnline(t), false);
+  assert.equal(jams.setSpeaker(t, "device-B"), false);
+  assert.equal(t.speakerId, "");
+
+  const j = jams.createJam(user("H2"), {}, "device-A", "speaker");
+  assert.equal(j.speakerId, "device-A");
+  assert.equal(jams.setSpeaker(j, "device-B"), true);
+});
+
+test("mode: in listen together every device advances the track", () => {
+  const t = jams.createJam(
+    user("H"),
+    { queue: [song("a"), song("b"), song("c")], index: 0, playing: true },
+    "",
+    "together"
+  );
+  // no speaker to gate on: whichever client's audio ends first wins, and the
+  // rest are no-ops because the index has already moved
+  assert.equal(jams.markEnded(t, 0, "device-B"), true);
+  assert.equal(t.index, 1);
+  assert.equal(jams.markEnded(t, 0, "device-C"), false);
+  assert.equal(jams.markEnded(t, 0, "device-B"), false);
+  assert.equal(t.index, 1);
+  // and the next track is advanced by whoever gets there first, not by name
+  assert.equal(jams.markEnded(t, 1, "device-Z"), true);
+  assert.equal(t.index, 2);
+});
+
 test("sweep: idle unconnected jams die, connected or fresh ones survive", () => {
   const a = jams.createJam(user("A"), {});
   const b = jams.createJam(user("B"), {});

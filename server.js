@@ -242,16 +242,53 @@ app.delete("/api/admin/user/:id", (req, res) => {
 // ---------------------------------------------------------------------------
 // Music API (ported from youtube-music-cli) — session required
 // ---------------------------------------------------------------------------
+const EMPTY_SEARCH = { songs: [], videos: [], albums: [], singles: [], artists: [], playlists: [] };
+
+// Upstream's album search answers with albums and nothing else — singles and
+// EPs only exist as their own shelves on an artist's page. So when the query is
+// essentially an artist's name, that page is where the short releases come from.
+const matchesQuery = (name, q) => {
+  const a = String(name).toLowerCase().trim();
+  const b = q.toLowerCase().trim();
+  return !!a && (a === b || a.startsWith(b) || b.startsWith(a));
+};
+
 app.get("/api/search", requireAuth, wrap(async (req, res) => {
   const q = String(req.query.q || "").trim();
-  if (!q) return res.json({ songs: [], albums: [], artists: [], playlists: [] });
-  const [songs, albums, artists, playlists] = await Promise.all([
+  if (!q) return res.json({ ...EMPTY_SEARCH });
+  const [songs, rawVideos, releases, artists, playlists] = await Promise.all([
     ytm.searchSongs(q),
+    ytm.searchVideos(q).catch(() => []),
     ytm.searchAlbums(q).catch(() => []),
     ytm.searchArtists(q).catch(() => []),
     ytm.searchPlaylists(q).catch(() => []),
   ]);
-  res.json({ songs, albums, artists, playlists });
+
+  // The song shelf already absorbs anything YouTube Music classes as a song, so
+  // a video that came back under both headings belongs with the songs.
+  const songIds = new Set(songs.map((s) => s.id));
+  const videos = rawVideos.filter((v) => !songIds.has(v.id));
+
+  const albums = releases.filter((r) => r.kind === "Album");
+  const singles = releases.filter((r) => r.kind !== "Album");
+
+  const named = artists.find((a) => matchesQuery(a.name, q));
+  if (named) {
+    const page = await getArtistPage(named.id).catch(() => null);
+    const seen = new Set([...albums, ...singles].map((r) => r.token));
+    for (const s of page?.singles ?? []) {
+      if (seen.has(s.token)) continue;
+      seen.add(s.token);
+      singles.push({ ...s, kind: "Single", artist: page.name });
+    }
+    for (const a of page?.albums ?? []) {
+      if (seen.has(a.token)) continue;
+      seen.add(a.token);
+      albums.push({ ...a, kind: "Album", artist: page.name });
+    }
+  }
+
+  res.json({ songs, videos, albums, singles, artists, playlists });
 }));
 
 app.get("/api/suggest", requireAuth, wrap(async (req, res) => {
@@ -265,12 +302,19 @@ app.get("/api/album/:token", requireAuth, wrap(async (req, res) => {
 }));
 
 const artistCache = new Map(); // channelId -> { data, exp }
+
+// Shared with /api/search, which reads an artist's singles shelf — searching a
+// band's name shouldn't cost a fresh page fetch every keystroke.
+async function getArtistPage(id) {
+  const hit = artistCache.get(id);
+  if (hit && hit.exp > Date.now()) return hit.data;
+  const data = await ytm.getArtist(id);
+  artistCache.set(id, { data, exp: Date.now() + 30 * 60 * 1000 });
+  return data;
+}
+
 app.get("/api/artist/:id", requireAuth, wrap(async (req, res) => {
-  const hit = artistCache.get(req.params.id);
-  if (hit && hit.exp > Date.now()) return res.json(hit.data);
-  const data = await ytm.getArtist(req.params.id);
-  artistCache.set(req.params.id, { data, exp: Date.now() + 30 * 60 * 1000 });
-  res.json(data);
+  res.json(await getArtistPage(req.params.id));
 }));
 
 const lyricsCache = new Map(); // videoId -> { data, exp }
@@ -327,6 +371,57 @@ app.get("/api/mixes", requireAuth, wrap(async (req, res) => {
 
   const data = { mixes };
   if (mixes.length) mixCache.set(req.user.id, { data, exp: Date.now() + 6 * 60 * 60 * 1000 });
+  res.json(data);
+}));
+
+// "Quick picks": the speed-dial grid on Home. Seeded from what you play most
+// and what you liked, then filled out with each seed's automix continuation and
+// interleaved so no single artist owns the top of the grid. Falls back to
+// Trending for an account with nothing to go on yet.
+const quickPickCache = new Map(); // userId -> { data, exp }
+
+app.get("/api/quickpicks", requireAuth, wrap(async (req, res) => {
+  const hit = quickPickCache.get(req.user.id);
+  if (hit && hit.exp > Date.now()) return res.json(hit.data);
+
+  // Favourites first, then recent plays — a seed each, one per artist.
+  const pool = [...db.topPlayed(req.user.id, 20), ...db.likedSongs(req.user.id), ...db.getHistory(req.user.id)];
+  const seeds = [];
+  const seenArtists = new Set();
+  for (const s of pool) {
+    const key = (s.artist || s.id).toLowerCase();
+    if (seenArtists.has(key)) continue;
+    seenArtists.add(key);
+    seeds.push(s);
+    if (seeds.length >= 5) break;
+  }
+
+  const lists = (await Promise.all(
+    seeds.map((seed) => ytm.getUpNext(seed.id, 12).catch(() => []))
+  )).filter((l) => l.length);
+
+  // Round-robin across the seeds so the grid reads as a mix, not five blocks.
+  const seedIds = new Set(seeds.map((s) => s.id));
+  const seen = new Set();
+  const songs = [];
+  for (let i = 0; songs.length < 24 && lists.some((l) => i < l.length); i++) {
+    for (const list of lists) {
+      const s = list[i];
+      if (!s || seen.has(s.id) || seedIds.has(s.id)) continue;
+      seen.add(s.id);
+      songs.push(s);
+      if (songs.length >= 24) break;
+    }
+  }
+
+  if (!songs.length) {
+    const { singles = [] } = await ytm.getTrending().catch(() => ({ singles: [] }));
+    const data = { songs: singles.slice(0, 24), seeded: false };
+    return res.json(data); // uncached: trending moves, and this is the cold path
+  }
+
+  const data = { songs, seeded: true };
+  quickPickCache.set(req.user.id, { data, exp: Date.now() + 3 * 60 * 60 * 1000 });
   res.json(data);
 }));
 
@@ -922,8 +1017,14 @@ app.post("/api/playlists/import", requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Jam sessions — shared real-time listening. REST for actions, SSE for push.
-// State lives in memory (lib/jam.js): jams are ephemeral, a restart ends them.
+// Shared real-time listening — REST for actions, SSE for push. State lives in
+// memory (lib/jam.js): sessions are ephemeral, a restart ends them.
+//
+// Two products over one engine, split by mode (see lib/jam.js): "speaker" is
+// a Jam (same room, one device makes sound) and "together" is Listen together
+// (everyone remote, every device plays). The routes are shared because the
+// queue, presence, permissions and transport are identical — only the audio
+// role differs, and that is decided on the client.
 // ---------------------------------------------------------------------------
 function requireJamMember(req, res, next) {
   const j = jam.jamForUser(req.user.id);
@@ -960,11 +1061,22 @@ async function refillJamIfEnding(j) {
 }
 
 app.post("/api/jam", requireAuth, (req, res) => {
-  const { queue, index, pos, playing, deviceId } = req.body || {};
-  // the creating device becomes the jam's speaker — the only one that
-  // actually plays audio; every other member is a synchronized remote
-  const j = jam.createJam(req.user, { queue, index, pos, playing }, deviceId);
+  const { queue, index, pos, playing, deviceId, mode } = req.body || {};
+  // In a jam the creating device becomes the speaker — the only one that
+  // actually plays audio; every other member is a synchronized remote. In
+  // listen-together mode there is no speaker: everyone plays their own copy.
+  const j = jam.createJam(req.user, { queue, index, pos, playing }, deviceId, mode);
   res.json(jam.snapshot(j, req.user.id));
+});
+
+// Server clock, for the client's offset estimate. Deliberately tiny: the
+// client times the round trip and keeps its lowest-latency sample, which is
+// far more accurate than reading `now` off a pushed SSE payload (that bakes
+// in one-way delay it can't measure). Listen-together needs that accuracy —
+// a 200ms offset error puts everyone permanently 200ms apart.
+app.get("/api/jam/time", requireAuth, (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ now: Date.now() });
 });
 
 app.get("/api/jam", requireAuth, (req, res) => {
@@ -1004,11 +1116,12 @@ app.post("/api/jam/settings", requireAuth, requireJamMember, requireJamHost, (re
   res.json({ settings: jam.setJamSettings(req.jam, req.body || {}) });
 });
 
-// host moves the audio to the device they're on ("play here")
+// host moves the audio to the device they're on ("play here") — jams only
 app.post("/api/jam/speaker", requireAuth, requireJamMember, requireJamHost, (req, res) => {
   const deviceId = String(req.body?.deviceId || "");
   if (!deviceId) return res.status(400).json({ error: "deviceId required" });
-  jam.setSpeaker(req.jam, deviceId);
+  if (!jam.setSpeaker(req.jam, deviceId))
+    return res.status(400).json({ error: "everyone's own device plays in listen together" });
   res.json({ ok: true });
 });
 
@@ -1056,8 +1169,9 @@ app.post("/api/jam/prev", requireAuth, requireJamMember, requireJamControl, (req
   res.json({ ok: true });
 });
 
-// the speaker device's <audio> finished the current track — advance the jam.
-// markEnded rejects reports from any other device (remotes have no audio).
+// a client's <audio> finished the current track — advance the session. In a
+// jam markEnded rejects reports from any device but the speaker (remotes have
+// no audio); in listen-together every member reports and the first one wins.
 app.post("/api/jam/ended", requireAuth, requireJamMember, wrap(async (req, res) => {
   const i = Number(req.body?.index);
   const deviceId = String(req.body?.deviceId || "");

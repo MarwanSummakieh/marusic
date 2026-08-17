@@ -140,6 +140,7 @@ const api = {
   lyrics: (id) => api.get(`/api/lyrics/${encodeURIComponent(id)}`),
   publicPlaylist: (browseId) => api.get(`/api/playlist/${encodeURIComponent(browseId)}`),
   mixes: () => api.get("/api/mixes"),
+  quickPicks: () => api.get("/api/quickpicks"),
   reco: (id) => api.get(`/api/reco/${encodeURIComponent(id)}`),
   radioStations: () => api.get("/api/radio/stations"),
   stationArt: (names) => api.send("POST", "/api/radio/art", { names }),
@@ -174,7 +175,9 @@ const api = {
   changeName: (name) => api.send("POST", "/api/account/name", { name }),
   changePassword: (current, next) => api.send("POST", "/api/account/password", { current, next }),
   jamState: () => api.get("/api/jam"),
-  jamCreate: (seed) => api.send("POST", "/api/jam", { ...seed, deviceId: jamDeviceId() }),
+  jamTime: () => api.get("/api/jam/time"),
+  jamCreate: (seed, mode) =>
+    api.send("POST", "/api/jam", { ...seed, mode, deviceId: jamDeviceId() }),
   jamSpeaker: () => api.send("POST", "/api/jam/speaker", { deviceId: jamDeviceId() }),
   jamPeek: (code) => api.get(`/api/jam/peek/${encodeURIComponent(code)}`),
   jamJoin: (code) => api.send("POST", "/api/jam/join", { code }),
@@ -311,6 +314,29 @@ function playQueue(songs, index = 0, opts = {}) {
   if (state.shuffle && !state.radio) buildShuffleOrder(index);
   else { state.order = null; }
   loadTrack(index, true);
+}
+
+/* Play one track and let YouTube Music's own "up next" decide the rest —
+   picking a song out of a list of search results means "play this", not "play
+   these thirty things I was only scanning". The track starts immediately and
+   the continuation lands a moment later; autoplay would fetch the same songs
+   at the end of the track anyway, so an empty result is harmless. */
+async function playSongRadio(song) {
+  if (!song) return;
+  if (inJam()) return playQueue([song], 0);
+  playQueue([song], 0);
+  let related = [];
+  try {
+    related = await api.reco(song.id);
+  } catch { /* the track is already playing; autoplay retries later */ }
+  // Bail if the listener moved on to something else while that was in flight.
+  if (!Array.isArray(related) || state.current?.id !== song.id || state.queue.length !== 1) return;
+  const fresh = related.filter((s) => s.id !== song.id && !hiddenTracks.has(s.id));
+  if (!fresh.length) return;
+  state.queue.push(...fresh);
+  if (state.order) state.order.push(...fresh.map((_, k) => 1 + k));
+  renderQueuePanel();
+  savePlayerState(true);
 }
 
 function buildShuffleOrder(startIdx) {
@@ -488,8 +514,9 @@ function handleTrackEnded() {
 
 audio.addEventListener("ended", () => {
   if (inJam()) {
-    // the speaker device finishing the track advances the jam for everyone
-    if (isJamSpeaker()) api.jamEnded(state.jam.index).catch(() => {});
+    // a device that finished the track advances the session for everyone —
+    // in listen together all of them report and the server takes the first
+    if (jamPlaysAudio()) api.jamEnded(state.jam.index).catch(() => {});
     return;
   }
   handleTrackEnded();
@@ -567,7 +594,7 @@ let prefetchedKey = "";
 function prefetchNext() {
   let s;
   if (inJam()) {
-    if (!isJamSpeaker()) return; // remotes never touch the stream proxy
+    if (!jamPlaysAudio()) return; // remotes never touch the stream proxy
     s = state.jam.queue[state.jam.index + 1] || null;
   } else {
     const ni = computeNextIndex();
@@ -597,7 +624,7 @@ audio.addEventListener("error", () => {
 function updatePlayButton() {
   // a jam remote has no audio of its own — the button mirrors the jam state;
   // while casting / on Sonos it mirrors the remote device
-  const paused = inJam() && !isJamSpeaker()
+  const paused = inJam() && !jamPlaysAudio()
     ? !state.jam.playing
     : castActive()
     ? castPlayer.isPaused || !castPlayer.isMediaLoaded
@@ -706,7 +733,7 @@ async function tintPlayerFrom(song) {
 // bar doesn't jump colour every time you tap pause.
 function applyPlayerTintState() {
   const player = document.querySelector(".player");
-  const paused = inJam() && !isJamSpeaker() ? !state.jam.playing
+  const paused = inJam() && !jamPlaysAudio() ? !state.jam.playing
     : castActive() ? castPlayer.isPaused || !castPlayer.isMediaLoaded
     : sonosActive() ? !sonosPlaying
     : audio.paused;
@@ -771,17 +798,17 @@ progressBar.addEventListener("pointerup", (e) => {
   const t = seekFromEvent(e) * seekDuration();
   if (castActive()) return castSeek(t);
   if (sonosActive()) return sonosSeek(t);
-  // optimistic on the device that has the audio; remotes wait for the sync
-  if (!inJam() || isJamSpeaker()) audio.currentTime = t;
+  // optimistic on a device that has the audio; remotes wait for the sync
+  if (!inJam() || jamPlaysAudio()) audio.currentTime = t;
   if (inJam()) jamControl(api.jamSeek, t);
 });
 
 /* controls */
 $("#btn-play").addEventListener("click", () => {
   if (inJam()) {
-    // speaker whose audio got blocked while the jam plays → this tap is the
-    // user gesture that lets us catch back up, not a jam-wide pause
-    if (isJamSpeaker() && state.jam.playing && audio.paused)
+    // our audio got blocked while the session plays → this tap is the user
+    // gesture that lets us catch back up, not a pause for everyone
+    if (jamPlaysAudio() && state.jam.playing && audio.paused)
       return jamApplyPlayback({ force: false });
     return jamControl(state.jam.playing ? api.jamPause : api.jamPlay);
   }
@@ -1111,7 +1138,7 @@ np2Bar.addEventListener("pointerup", (e) => {
   const t = np2SeekFromEvent(e) * seekDuration();
   if (castActive()) return castSeek(t);
   if (sonosActive()) return sonosSeek(t);
-  if (!inJam() || isJamSpeaker()) audio.currentTime = t;
+  if (!inJam() || jamPlaysAudio()) audio.currentTime = t;
   if (inJam()) jamControl(api.jamSeek, t);
 });
 
@@ -1543,12 +1570,13 @@ $("#queue-list").addEventListener("click", (e) => {
 function renderJamQueue(list) {
   const j = state.jam;
   const listening = j.members.filter((m) => m.connected).length;
-  let html = `<a class="jam-strip" href="#/jam" title="Open the jam">
-    <span class="jam-strip-icon">${I.group}</span>
+  const c = jamCopy(jamMode());
+  let html = `<a class="jam-strip" href="${jamRoute(jamMode())}" title="Open the ${c.noun}">
+    <span class="jam-strip-icon">${c.icon()}</span>
     <span class="jam-strip-meta">
-      <span class="jam-strip-title">Jam · ${esc(j.code)}</span>
-      <span class="jam-strip-sub">${j.members.length} in the jam · ${listening} online${
-        isJamSpeaker() ? " · playing here" : ""
+      <span class="jam-strip-title">${c.title} · ${esc(j.code)}</span>
+      <span class="jam-strip-sub">${j.members.length} in · ${listening} online${
+        jamPlaysAudio() ? " · playing here" : ""
       }</span>
     </span>${I.chevronRight}
   </a>`;
@@ -1587,11 +1615,16 @@ $("#queue-list").addEventListener("click", (e) => {
   if (el) loadTrack(Number(el.dataset.qi), true);
 });
 
-/* ---------------- jam sessions (listen together) ----------------
-   The server clock owns jam playback: state is { index, playing, pos, at }
-   with `pos` measured at server-time `at`. Every client (host included)
-   slaves its <audio> to that — controls just POST intents, and the SSE
-   stream brings back the truth. */
+/* ---------------- shared listening: jams & listen together ----------------
+   The server clock owns playback: state is { index, playing, pos, at } with
+   `pos` measured at server-time `at`. Every client (host included) slaves its
+   <audio> to that — controls just POST intents, and the SSE stream brings back
+   the truth.
+
+   Two modes (see lib/jam.js), differing only in who renders the audio:
+     "speaker"  — Jam, same room: one device sounds, the rest are remotes.
+     "together" — Listen together, everyone remote: every device plays.
+   Almost everything below is shared; jamPlaysAudio() is the fork. */
 let jamES = null; // EventSource
 let jamLoadedKey = ""; // `${index}:${songId}` this client's UI is showing
 let jamRecheckAt = 0; // throttle for "does my jam still exist?" after ES errors
@@ -1602,6 +1635,45 @@ const inJam = () => !!state.jam;
 const jamIsHost = () => inJam() && state.jam.youId === state.jam.hostId;
 const jamCanControl = () => inJam() && (jamIsHost() || state.jam.settings.guestsControl);
 const jamSong = () => state.jam?.queue[state.jam.index] || null;
+const jamMode = () => state.jam?.mode || "speaker";
+const isTogether = () => inJam() && jamMode() === "together";
+
+/* everything the two features say differently — one table so the copy for a
+   mode lives in one place instead of scattered ternaries */
+const JAM_COPY = {
+  speaker: {
+    route: "jam",
+    noun: "jam",
+    title: "Jam",
+    icon: () => I.group,
+    blurb: `Everyone's in the same room. One device plays the music and everyone
+      else's phone becomes a remote — same queue, no echo.`,
+    start: "Start a jam",
+    startFrom: "Start a jam from what's playing",
+    started: "Jam started — share the code",
+    invited: "invited you to a jam",
+    join: "Join the jam",
+  },
+  together: {
+    route: "together",
+    noun: "listen together",
+    title: "Listen together",
+    icon: () => I.volume,
+    blurb: `Everyone's somewhere else. Every device plays its own audio, held in
+      sync to the same moment of the same song — so hop in a call and listen.`,
+    start: "Start listening together",
+    startFrom: "Listen together from what's playing",
+    started: "Started — share the code and hop in a call",
+    invited: "invited you to listen together",
+    join: "Join and listen",
+  },
+};
+const jamCopy = (mode) => JAM_COPY[mode] || JAM_COPY.speaker;
+// what the session is called in front of the user
+const jamNoun = () => jamCopy(jamMode()).noun;
+// the route that shows a given session
+const jamRoute = (mode) => `#/${jamCopy(mode).route}`;
+const onJamRoute = () => currentRoute === "jam" || currentRoute === "together";
 
 // One device per jam makes the sound — the tab that created it (or that the
 // host later picked via "Play here"). Everyone else is a synchronized remote.
@@ -1614,14 +1686,67 @@ function jamDeviceId() {
   }
   return id;
 }
+// the one device sounding a jam (also drives the "Play here" UI)
 const isJamSpeaker = () => inJam() && state.jam.speakerId === jamDeviceId();
+// does *this* device render the audio? In listen together, always.
+const jamPlaysAudio = () => inJam() && (isTogether() || isJamSpeaker());
 
-// where the jam is *right now*, from the last sync + our clock offset
+// where the session is *right now*, from the last sync + our clock offset
 function jamTargetPos() {
   const j = state.jam;
   if (!j) return 0;
   if (!j.playing) return j.pos;
   return Math.max(0, j.pos + (Date.now() + j.offset - j.at) / 1000);
+}
+
+/* ---- clock offset ----
+   `offset` converts our Date.now() to server time. Reading it off a pushed
+   SSE payload (server_now - our_now) silently includes the one-way delivery
+   delay, which we can't measure and which jitters. A jam didn't care — one
+   device made sound, so being 200ms off matched nothing. Listen together
+   does: a biased offset holds everyone permanently that far apart.
+
+   So we time round trips to /api/jam/time and keep the *lowest-RTT* sample,
+   since the fastest round trip is the least skewed. */
+let jamClockRtt = Infinity; // best RTT seen for the offset we're holding
+let jamClockTimer = null;
+
+async function jamProbeClock(rounds = 4) {
+  for (let i = 0; i < rounds; i++) {
+    if (!inJam()) return;
+    const t0 = performance.now();
+    let now;
+    try {
+      ({ now } = await api.jamTime());
+    } catch {
+      return;
+    }
+    const rtt = performance.now() - t0;
+    if (!inJam() || rtt >= jamClockRtt) continue;
+    jamClockRtt = rtt;
+    // the reply was written ~rtt/2 ago, so server time is `now + rtt/2` right
+    // about now — and Date.now() moved on by however long the parse took
+    state.jam.offset = now + rtt / 2 - Date.now();
+  }
+}
+
+function jamStartClock() {
+  jamClockRtt = Infinity;
+  jamProbeClock(5);
+  clearInterval(jamClockTimer);
+  // re-probe occasionally: laptops sleep, clocks get stepped by NTP. The best
+  // sample decays so a stale lucky RTT can't lock out a fresh accurate one.
+  jamClockTimer = setInterval(() => {
+    if (!inJam()) return;
+    jamClockRtt *= 1.5;
+    jamProbeClock(3);
+  }, 60_000);
+}
+
+function jamStopClock() {
+  clearInterval(jamClockTimer);
+  jamClockTimer = null;
+  jamClockRtt = Infinity;
 }
 
 async function jamControl(fn, ...args) {
@@ -1637,7 +1762,7 @@ async function jamControl(fn, ...args) {
 async function jamAddSongs(songs) {
   try {
     const { added } = await api.jamAdd(songs);
-    toast(added === 1 ? "Added to the jam queue" : `Added ${added} songs to the jam queue`);
+    toast(added === 1 ? "Added to the queue" : `Added ${added} songs to the queue`);
   } catch (err) {
     toast(err.message, true);
   }
@@ -1645,6 +1770,7 @@ async function jamAddSongs(songs) {
 
 function jamApplyState(snap) {
   Object.assign(state.jam, {
+    mode: snap.mode || "speaker",
     hostId: snap.hostId,
     speakerId: snap.speakerId,
     speakerOnline: snap.speakerOnline,
@@ -1655,18 +1781,51 @@ function jamApplyState(snap) {
     playing: snap.playing,
     pos: snap.pos,
     at: snap.at,
-    offset: snap.now - Date.now(),
   });
+  jamAdoptOffset(snap.now);
+}
+
+// only trust a payload's clock until a round-trip probe gives us a better one
+function jamAdoptOffset(serverNow) {
+  if (jamClockRtt === Infinity && Number.isFinite(serverNow))
+    state.jam.offset = serverNow - Date.now();
+}
+
+/* ---- drift correction ----
+   In a jam this barely matters: one device makes sound, so the only job is
+   keeping the seek bar honest, and a lazy 2.5s tolerance avoids pointless
+   seeking. Listen together is the opposite — being a second apart from your
+   friends is the whole failure mode, but hard-seeking to fix it is an audible
+   glitch. So: nudge playbackRate for small drift (inaudible at ±3%, closes a
+   200ms gap in a few seconds) and only seek when we're too far out for a
+   nudge to catch up in reasonable time. */
+const JAM_DRIFT_SEEK = 1.0; // past this, a nudge would take too long — seek
+const JAM_DRIFT_NUDGE = 0.15; // inside this we're in sync; run at exactly 1×
+const JAM_RATE_MAX = 0.03; // ±3%, comfortably below the audible-pitch floor
+const JAM_DRIFT_TOLERANCE = 2.5; // jam mode: nobody is listening in parallel
+
+function jamSetRate(rate) {
+  if (Math.abs(audio.playbackRate - rate) > 0.0005) audio.playbackRate = rate;
 }
 
 function jamSyncPosition() {
   const apply = () => {
     const target = jamTargetPos();
-    if (Math.abs((audio.currentTime || 0) - target) > 2.5) {
-      // past the end (everyone lagged): the seek clamps, `ended` fires,
-      // and the ended report advances the jam — exactly what we want
-      audio.currentTime = target;
+    const drift = (audio.currentTime || 0) - target; // >0 = we're ahead
+    if (!isTogether()) {
+      // past the end (everyone lagged): the seek clamps, `ended` fires, and
+      // the ended report advances the session — exactly what we want
+      if (Math.abs(drift) > JAM_DRIFT_TOLERANCE) audio.currentTime = target;
+      return;
     }
+    if (Math.abs(drift) > JAM_DRIFT_SEEK || !state.jam.playing || audio.paused) {
+      jamSetRate(1);
+      if (Math.abs(drift) > JAM_DRIFT_SEEK) audio.currentTime = target;
+      return;
+    }
+    if (Math.abs(drift) <= JAM_DRIFT_NUDGE) return jamSetRate(1);
+    // steer toward the target: ahead → slow down, behind → speed up
+    jamSetRate(1 - Math.max(-JAM_RATE_MAX, Math.min(JAM_RATE_MAX, drift / 4)));
   };
   if (audio.readyState >= 1) apply();
   else audio.addEventListener("loadedmetadata", apply, { once: true });
@@ -1675,11 +1834,11 @@ function jamSyncPosition() {
 function jamApplyPlayback(opts = {}) {
   const j = state.jam;
   if (!j) return;
-  const speaker = isJamSpeaker();
+  const plays = jamPlaysAudio();
   jamSyncTicker();
   const song = jamSong();
   if (!song) {
-    // empty jam — silence until somebody adds a song
+    // nothing queued — silence until somebody adds a song
     audio.pause();
     jamLoadedKey = "";
     updatePlayButton();
@@ -1692,8 +1851,9 @@ function jamApplyPlayback(opts = {}) {
     updateNowPlaying();
     setMediaSession(song);
     highlightPlayingRow();
-    if (speaker) {
-      // only the device actually playing writes listening history
+    if (plays) {
+      // only a device actually playing writes listening history — which in
+      // listen together is everyone, and rightly so: they each heard it
       api.saveHistory(song).catch(() => {});
       state.library.history = [
         song,
@@ -1702,9 +1862,10 @@ function jamApplyPlayback(opts = {}) {
     }
     if (!$("#lyrics-panel").classList.contains("hidden")) renderLyricsPanel();
   }
-  if (!speaker) {
+  if (!plays) {
     // this device is a remote control: it shows the jam, the speaker sounds it
     if (!audio.paused) audio.pause();
+    jamSetRate(1);
     hideJamResume();
     updatePlayButton();
     return;
@@ -1726,7 +1887,7 @@ function jamApplyPlayback(opts = {}) {
 /* remotes have no audio events to move the progress bar — a timer derives
    the position from the last sync and the server-clock offset instead */
 function jamSyncTicker() {
-  const want = inJam() && !isJamSpeaker();
+  const want = inJam() && !jamPlaysAudio();
   if (want && !jamTicker) jamTicker = setInterval(jamTickProgress, 500);
   if (!want && jamTicker) {
     clearInterval(jamTicker);
@@ -1755,7 +1916,7 @@ function jamTickProgress() {
 // seconds the seek bars should map to — remotes have no audio metadata,
 // and while casting / on Sonos the remote device owns the clock
 const seekDuration = () =>
-  inJam() && !isJamSpeaker()
+  inJam() && !jamPlaysAudio()
     ? jamSong()?.duration || 0
     : castActive()
     ? castPlayer.duration || state.current?.duration || 0
@@ -1763,19 +1924,23 @@ const seekDuration = () =>
     ? sonosDur || state.current?.duration || 0
     : audio.duration || 0;
 
-// periodic nudge back into sync (buffering, tab throttling, …)
+// periodic nudge back into sync (buffering, tab throttling, …). Listen
+// together checks four times as often: it's steering with playbackRate, which
+// needs to see the drift shrink to know when to stop.
 function jamDriftCheck() {
-  if (Date.now() - jamDriftAt < 3000) return;
+  if (Date.now() - jamDriftAt < (isTogether() ? 750 : 3000)) return;
   jamDriftAt = Date.now();
   const j = state.jam;
-  if (!j?.playing || !jamSong() || audio.paused || audio.readyState < 2) return;
+  if (!j?.playing || !jamSong() || audio.paused || audio.readyState < 2)
+    return jamSetRate(1);
   jamSyncPosition();
 }
 
-/* the browser blocked un-gestured playback — one tap re-joins the music
-   (only ever relevant on the speaker device; remotes are silent by design) */
+/* the browser blocked un-gestured playback — one tap re-joins the music.
+   In a jam only the speaker ever sees this (remotes are silent by design);
+   in listen together everyone needs their own gesture. */
 function showJamResume() {
-  if (isJamSpeaker()) $("#jam-resume").classList.remove("hidden");
+  if (jamPlaysAudio()) $("#jam-resume").classList.remove("hidden");
 }
 function hideJamResume() {
   $("#jam-resume").classList.add("hidden");
@@ -1786,11 +1951,12 @@ $("#jam-resume").addEventListener("click", () => {
 });
 
 function enterJam(snap, opts = {}) {
-  // a jam takes over the audio — remote outputs can't own playback alongside it
+  // a session takes over the audio — remote outputs can't own playback too
   if (castActive()) castCtx.endCurrentSession(true);
   if (sonosActive()) sonosStopToLocal({ silent: true });
-  state.jam = { code: snap.code, youId: snap.you.id };
+  state.jam = { code: snap.code, youId: snap.you.id, mode: snap.mode || "speaker" };
   jamApplyState(snap);
+  jamStartClock();
   jamLoadedKey = "";
   // a jam replaces any local listening context
   state.radio = null;
@@ -1803,7 +1969,12 @@ function enterJam(snap, opts = {}) {
   jamApplyPlayback({ force: true });
   renderJamChip();
   renderQueuePanel();
-  if (!opts.quiet) toast(`You're in the jam · code ${snap.code}`);
+  if (!opts.quiet)
+    toast(
+      snap.mode === "together"
+        ? `You're listening together · code ${snap.code}`
+        : `You're in the jam · code ${snap.code}`
+    );
 }
 
 function exitJamMode(msg) {
@@ -1814,7 +1985,9 @@ function exitJamMode(msg) {
     jamES.close();
     jamES = null;
   }
+  jamStopClock();
   jamSyncTicker(); // stops the remote progress timer
+  jamSetRate(1); // drop any drift-correction nudge
   hideJamResume();
   jamLoadedKey = "";
   // keep the music going: the jam queue becomes your local queue
@@ -1850,7 +2023,7 @@ function exitJamMode(msg) {
   renderJamChip();
   renderQueuePanel();
   if (msg) toast(msg);
-  if (currentRoute === "jam") router();
+  if (onJamRoute()) router();
 }
 
 function jamOpenEvents() {
@@ -1866,7 +2039,7 @@ function jamOpenEvents() {
     applyAutoplayUI();
     renderJamChip();
     renderQueuePanel();
-    if (currentRoute === "jam") renderJamView();
+    if (onJamRoute()) renderJamView("", jamMode());
   });
 
   es.addEventListener("sync", (e) => {
@@ -1874,11 +2047,11 @@ function jamOpenEvents() {
     const s = parse(e);
     Object.assign(state.jam, {
       index: s.index, playing: s.playing, pos: s.pos, at: s.at,
-      offset: s.now - Date.now(),
     });
+    jamAdoptOffset(s.now);
     jamApplyPlayback();
     renderQueuePanel();
-    if (currentRoute === "jam") renderJamView();
+    if (onJamRoute()) renderJamView("", jamMode());
   });
 
   es.addEventListener("queue", (e) => {
@@ -1889,34 +2062,36 @@ function jamOpenEvents() {
     if (q.added && q.by && q.by !== state.user?.name) {
       toast(
         q.by === "Autoplay"
-          ? "Autoplay added similar songs to the jam"
-          : `${q.by} added ${q.added === 1 ? "a song" : `${q.added} songs`} to the jam`
+          ? "Autoplay added similar songs"
+          : `${q.by} added ${q.added === 1 ? "a song" : `${q.added} songs`}`
       );
     }
     jamApplyPlayback(); // a removal can shift the index
     renderQueuePanel();
-    if (currentRoute === "jam") renderJamView();
+    if (onJamRoute()) renderJamView("", jamMode());
   });
 
   es.addEventListener("members", (e) => {
     if (!inJam()) return;
     const m = parse(e);
-    const wasSpeaker = isJamSpeaker();
+    const wasPlaying = jamPlaysAudio();
     state.jam.hostId = m.hostId;
+    if (m.mode) state.jam.mode = m.mode;
     state.jam.speakerId = m.speakerId;
     state.jam.speakerOnline = m.speakerOnline;
     state.jam.members = m.members;
     // audio moved to (or away from) this device — start or stop the sound
-    if (wasSpeaker !== isJamSpeaker()) jamApplyPlayback({ force: true });
+    if (wasPlaying !== jamPlaysAudio()) jamApplyPlayback({ force: true });
     const note = m.note;
-    if (note?.type === "join") toast(`${note.name} joined the jam`);
-    if (note?.type === "leave") toast(`${note.name} left the jam`);
-    if (note?.type === "kick") toast(`${note.name} was removed from the jam`);
+    const noun = jamNoun();
+    if (note?.type === "join") toast(`${note.name} joined the ${noun}`);
+    if (note?.type === "leave") toast(`${note.name} left the ${noun}`);
+    if (note?.type === "kick") toast(`${note.name} was removed from the ${noun}`);
     if (note?.type === "host")
-      toast(note.left ? `${note.left} left — ${note.name} hosts the jam now` : `${note.name} hosts the jam now`);
+      toast(note.left ? `${note.left} left — ${note.name} hosts the ${noun} now` : `${note.name} hosts the ${noun} now`);
     renderJamChip();
     renderQueuePanel();
-    if (currentRoute === "jam") renderJamView();
+    if (onJamRoute()) renderJamView("", jamMode());
   });
 
   es.addEventListener("settings", (e) => {
@@ -1924,12 +2099,12 @@ function jamOpenEvents() {
     state.jam.settings = parse(e).settings;
     applyAutoplayUI();
     renderQueuePanel();
-    if (currentRoute === "jam") renderJamView();
+    if (onJamRoute()) renderJamView("", jamMode());
   });
 
   es.addEventListener("jam-ended", () =>
-    exitJamMode(jamIsHost() ? "Jam ended" : "The host ended the jam"));
-  es.addEventListener("kicked", () => exitJamMode("You were removed from the jam"));
+    exitJamMode(jamIsHost() ? `Ended the ${jamNoun()}` : `The host ended the ${jamNoun()}`));
+  es.addEventListener("kicked", () => exitJamMode(`You were removed from the ${jamNoun()}`));
   es.addEventListener("left", () => exitJamMode()); // this account left from another tab
 
   es.onerror = () => {
@@ -1945,17 +2120,20 @@ function jamOpenEvents() {
   };
 }
 
-/* topbar chip: always-visible way back to the jam while it's on */
+/* topbar chip: always-visible way back to the session while it's on */
 function renderJamChip() {
   const chip = $("#jam-chip");
   if (!inJam()) return chip.classList.add("hidden");
+  const c = jamCopy(jamMode());
   chip.classList.remove("hidden");
-  chip.innerHTML = `${I.group}<span class="jam-chip-code">${esc(state.jam.code)}</span><span class="jam-chip-count">${state.jam.members.length}</span>`;
+  chip.setAttribute("href", jamRoute(jamMode()));
+  chip.title = `Open the ${c.noun}`;
+  chip.innerHTML = `${c.icon()}<span class="jam-chip-code">${esc(state.jam.code)}</span><span class="jam-chip-count">${state.jam.members.length}</span>`;
 }
 
 $("#np2-jam").addEventListener("click", () => {
   closeNpSheet();
-  location.hash = "#/jam";
+  location.hash = inJam() ? jamRoute(jamMode()) : "#/jam";
 });
 
 /* ---------------- Google Cast (Chromecast) ----------------
@@ -2034,8 +2212,8 @@ function initCast() {
 
 function onCastConnected(resumed) {
   if (inJam()) {
-    // the jam speaker owns the audio — don't fight it from a TV
-    toast("Casting isn't available during a jam", true);
+    // the session owns the audio — don't fight it from a TV
+    toast(`Casting isn't available during a ${jamNoun()}`, true);
     castCtx.endCurrentSession(true);
     return;
   }
@@ -2292,7 +2470,7 @@ const sonosSongPayload = (s) => ({
 });
 
 async function sonosSelect(dev) {
-  if (inJam()) return toast("Playback devices are disabled in a jam", true);
+  if (inJam()) return toast(`Playback devices are disabled during a ${jamNoun()}`, true);
   // capture the handover position from whatever is sounding right now
   let at = 0;
   let wasPlaying = false;
@@ -2578,7 +2756,12 @@ if (window.WebKitPlaybackTargetAvailabilityEvent) {
    One button, one menu, every way the audio can leave this tab. */
 async function openOutputMenu(e) {
   if (inJam())
-    return toast("Playback devices are disabled in a jam — the jam speaker owns the audio", true);
+    return toast(
+      isTogether()
+        ? "Playback devices are disabled while listening together — the sync only holds on this device"
+        : "Playback devices are disabled in a jam — the jam speaker owns the audio",
+      true
+    );
   const x = e.clientX, y = e.clientY;
   const localOn = !castOn && !sonosActive() && !airplayOn;
   popover.innerHTML = `
@@ -2975,7 +3158,7 @@ $("#user-chip").addEventListener("click", (e) => {
     closePopover();
     const act = btn.dataset.act;
     if (act === "admin") location.hash = "#/profile";
-    if (act === "jam") location.hash = "#/jam";
+    if (act === "jam") location.hash = inJam() ? jamRoute(jamMode()) : "#/jam";
     if (act === "profile") location.hash = "#/profile";
     if (act === "friends") location.hash = "#/profile/friends";
     if (act === "settings") location.hash = "#/profile/settings";
@@ -3277,7 +3460,10 @@ view.addEventListener("click", async (e) => {
       router();
       return;
     }
-    playQueue(viewCtx.songs, idx);
+    // On a results page the list is something you were reading, not a queue you
+    // chose — one pick starts that track and a radio built from it.
+    if (viewCtx.songRadio) playSongRadio(song);
+    else playQueue(viewCtx.songs, idx);
     return;
   }
 
@@ -3286,7 +3472,20 @@ view.addEventListener("click", async (e) => {
     const playClicked = !!e.target.closest(".card-play");
     const kind = card.dataset.card;
     if (kind === "song") {
-      playQueue(viewCtx.songs, Number(card.dataset.idx));
+      const idx = Number(card.dataset.idx);
+      if (viewCtx.songRadio) playSongRadio(viewCtx.songs[idx]);
+      else playQueue(viewCtx.songs, idx);
+    } else if (kind === "video") {
+      // Video cards sit on the search overview beside the song rows, so they
+      // index into their own list rather than viewCtx.songs.
+      playSongRadio(searchData?.videos?.[Number(card.dataset.idx)]);
+    } else if (kind === "quickpick") {
+      const pick = homeQuickPicks[Number(card.dataset.idx)];
+      if (!pick) return;
+      if (e.target.closest(".qp-more")) return openRowMenu(e, pick);
+      // The picks are a shelf you chose to look at, so they play as a set —
+      // the same as tapping one in YouTube Music's own grid.
+      playQueue(homeQuickPicks, Number(card.dataset.idx));
     } else if (kind === "album") {
       if (playClicked) {
         try {
@@ -3389,6 +3588,7 @@ async function startRadio(name) {
    it wherever you want. The layout lives in prefs, so it survives reloads. */
 const HOME_ROWS = [
   { id: "shortcuts", label: "Shortcuts" },
+  { id: "quickpicks", label: "Quick picks" },
   { id: "mixes", label: "Made for you" },
   { id: "history", label: "Jump back in" },
   { id: "trending", label: "Trending" },
@@ -3456,6 +3656,7 @@ function renderHome() {
   const bodyFor = (row) => {
     if (row.id === "shortcuts")
       return shortcuts ? `<div class="shortcut-grid">${shortcuts}</div>` : "";
+    if (row.id === "quickpicks") return `<div class="section" id="home-quickpicks"></div>`;
     if (row.id === "mixes") return `<div class="section" id="home-mixes"></div>`;
     if (row.id === "history")
       return history.length ? `
@@ -3498,6 +3699,7 @@ function renderHome() {
   $("#home-customise").onclick = () => { homeEditing = !homeEditing; renderHome(); };
 
   const wanted = (id) => rows.some((r) => r.id === id && (homeEditing || !r.hidden));
+  if (wanted("quickpicks")) loadHomeQuickPicks();
   if (wanted("mixes")) loadHomeMixes();
   if (wanted("trending")) loadHomeTrending();
   if (wanted("radio")) loadHomeRadio();
@@ -3570,6 +3772,7 @@ view.addEventListener("dragend", () => {
 let homeTrending = [];        // the trending singles, as one playlist
 let homeTrendingReleases = []; // trending albums & EPs, shown beside it
 let homeMixes = [];
+let homeQuickPicks = [];
 
 // Cards for the trending releases — kind stays "album" (same click handler),
 // only the visual type differs between a full album and a short EP/single.
@@ -3594,6 +3797,40 @@ const trendingPlaylistCard = (singles) =>
     title: "Trending Singles",
     sub: `${singles.length} single${singles.length === 1 ? "" : "s"} · YouTube Music`,
   });
+
+/* Quick picks — the speed dial.
+   A wall of single tracks four deep that pages sideways, so a screenful puts a
+   dozen songs one tap away instead of a dozen things to open first. Deliberately
+   not cards: cards are for something you browse into, and none of these have an
+   inside. */
+const quickPickHTML = (s, i) => `
+  <div class="qp" data-card="quickpick" data-idx="${i}">
+    ${artImg(s.image, "qp-art")}
+    <div class="qp-text">
+      <div class="qp-title">${esc(s.title)}</div>
+      <div class="qp-sub">${esc(s.artist)}</div>
+    </div>
+    <button class="icon-btn qp-more" title="More">${I.more}</button>
+  </div>`;
+
+async function loadHomeQuickPicks() {
+  try {
+    const { songs = [], seeded } = await api.quickPicks();
+    const el = $("#home-quickpicks");
+    if (!el || !songs.length) return;
+    homeQuickPicks = songs;
+    el.innerHTML = `
+      <h2>Quick picks
+        <button class="btn-outline qp-playall" id="qp-play-all">Play all</button>
+      </h2>
+      <p class="section-note">${seeded
+        ? "Built from what you play most — one tap each."
+        : "Trending right now. Play a few songs and these become yours."}</p>
+      <div class="qp-grid shelf">${songs.map(quickPickHTML).join("")}</div>`;
+    $("#qp-play-all").onclick = () => playQueue(homeQuickPicks, 0);
+    mountShelfControls();
+  } catch { /* quick picks are a shelf like any other — optional */ }
+}
 
 async function loadHomeMixes() {
   try {
@@ -3703,6 +3940,88 @@ const browseSectionsHTML = () =>
       </div>
     </div>`).join("");
 
+/* ---- search results ----
+   Results arrive already sorted into kinds, and the page keeps them that way:
+   a filter row across the top, an "All" overview that shows the head of every
+   kind, and a focused page per kind behind each chip. Switching chips never
+   refetches — the whole response is held in `searchData`. */
+const SEARCH_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "songs", label: "Songs" },
+  { id: "videos", label: "Videos" },
+  { id: "albums", label: "Albums" },
+  { id: "singles", label: "Singles & EPs" },
+  { id: "artists", label: "Artists" },
+  { id: "playlists", label: "Playlists" },
+];
+
+let searchFilter = "all";
+let searchData = null;  // the last response, kept for chip switching
+let searchDataQ = "";   // the query it belongs to
+
+const artistCards = (artists) =>
+  artists.map((a) =>
+    CARD({ kind: "artist", type: "artist", round: true, noPlay: true,
+           attrs: `data-id="${esc(a.id)}"`, image: a.image, title: a.name, sub: "" })
+  ).join("");
+
+// One card shape for every release; only the type badge tells an album from an
+// EP from a single.
+const releaseCards = (releases) =>
+  releases.map((r) => {
+    const type = String(r.kind || "album").toLowerCase();
+    return CARD({
+      kind: "album",
+      type: TYPES[type] ? type : "album",
+      attrs: `data-token="${esc(r.token)}"`,
+      image: r.image,
+      title: r.title,
+      sub: [r.year, r.artist].filter(Boolean).join(" · "),
+    });
+  }).join("");
+
+const ytPlaylistCards = (playlists) =>
+  playlists.map((p) =>
+    CARD({ kind: "ytplaylist", type: "playlist", attrs: `data-token="${esc(p.browseId)}"`,
+           image: p.image, title: p.title, sub: p.author ? `By ${p.author}` : "YouTube Music" })
+  ).join("");
+
+// YouTube Music leads with the artist when the query is basically their name,
+// and with a track otherwise. Same rule here.
+function topResult(q, { songs, artists }) {
+  const needle = q.toLowerCase();
+  const artist = artists.find((a) => {
+    const name = a.name.toLowerCase();
+    return name === needle || name.startsWith(needle) || needle.startsWith(name);
+  });
+  if (artist) return { kind: "artist", item: artist };
+  return songs[0] ? { kind: "song", item: songs[0] } : null;
+}
+
+const topResultHTML = (top) =>
+  top.kind === "artist"
+    ? `<div class="top-result" data-card="artist" data-id="${esc(top.item.id)}">
+         ${artImg(top.item.image, "round")}
+         <div>
+           <div class="tr-title">${esc(top.item.name)}</div>
+           <div class="tr-sub">Artist</div>
+         </div>
+       </div>`
+    : `<div class="top-result" data-card="song" data-idx="0">
+         ${artImg(top.item.image)}
+         <div>
+           <div class="tr-title">${esc(top.item.title)}</div>
+           <div class="tr-sub">Song · <b>${esc(top.item.artist)}</b></div>
+         </div>
+         <button class="card-play">${I.play}</button>
+       </div>`;
+
+const searchSection = (title, body, seeAll) =>
+  body ? `<div class="section">
+    <h2>${esc(title)}${seeAll ? ` <a class="see-all" data-filter="${seeAll}">Show all</a>` : ""}</h2>
+    ${body}
+  </div>` : "";
+
 function renderSearch() {
   const q = state.searchQ.trim();
   if (!q) {
@@ -3715,93 +4034,136 @@ function renderSearch() {
     paintSuggestions();
     return;
   }
+
+  // A repeat of the query we already hold (a chip click) repaints from memory.
+  if (searchData && searchDataQ === q) return paintSearch(q);
+
+  searchFilter = "all";
   view.innerHTML = `<div class="spinner"></div>`;
   const token = ++searchToken;
 
-  api.search(q).then(({ songs, albums, artists = [], playlists = [] }) => {
+  api.search(q).then((data) => {
     if (token !== searchToken || currentRoute !== "search") return;
-    if (!songs.length && !albums.length && !artists.length && !playlists.length) {
-      view.innerHTML = `
-        <div class="search-empty">
-          <h3>No results found for "${esc(q)}"</h3>
-          <p>Check the spelling, or try different keywords.</p>
-        </div>
-        <div id="search-suggest"></div>`;
-      viewCtx = { songs: [], playlistId: null };
-      paintSuggestions();
-      return;
-    }
-
-    const top = songs[0];
-    view.innerHTML = `
-      <div id="search-suggest"></div>
-      ${top ? `
-      <div class="section">
-        <div class="search-top">
-          <div>
-            <h2>Top result</h2>
-            <div class="top-result" data-card="song" data-idx="0">
-              ${artImg(top.image)}
-              <div>
-                <div class="tr-title">${esc(top.title)}</div>
-                <div class="tr-sub">Song · <b>${esc(top.artist)}</b></div>
-              </div>
-              <button class="card-play">${I.play}</button>
-            </div>
-          </div>
-          <div>
-            <h2>Songs</h2>
-            <div id="search-songs"></div>
-          </div>
-        </div>
-      </div>` : ""}
-      ${artists.length ? `
-      <div class="section">
-        <h2>Artists</h2>
-        <div class="card-grid">
-          ${artists.slice(0, 6).map((a) =>
-            CARD({ kind: "artist", type: "artist", round: true, noPlay: true, attrs: `data-id="${esc(a.id)}"`, image: a.image, title: a.name, sub: "" })
-          ).join("")}
-        </div>
-      </div>` : ""}
-      ${songs.length > 5 ? `<div class="section"><h2>All songs</h2><div id="search-all-songs"></div></div>` : ""}
-      ${albums.length ? `
-      <div class="section">
-        <h2>Albums</h2>
-        <div class="card-grid">
-          ${albums.slice(0, 10).map((a) =>
-            CARD({ kind: "album", type: "album", attrs: `data-token="${esc(a.token)}"`, image: a.image, title: a.title, sub: `${a.year ? a.year + " · " : ""}${a.artist}` })
-          ).join("")}
-        </div>
-      </div>` : ""}
-      ${playlists.length ? `
-      <div class="section">
-        <h2>Playlists</h2>
-        <div class="card-grid">
-          ${playlists.slice(0, 10).map((p) =>
-            CARD({ kind: "ytplaylist", type: "playlist", attrs: `data-token="${esc(p.browseId)}"`, image: p.image, title: p.title, sub: p.author ? `By ${p.author}` : "YouTube Music" })
-          ).join("")}
-        </div>
-      </div>` : ""}`;
-
-    viewCtx = { songs, playlistId: null };
-    setTabTitle(`“${q}”`);
-    paintSuggestions();
-    const short = $("#search-songs");
-    if (short) short.innerHTML = trackListHTML(songs.slice(0, 5), { noAlbum: true });
-    const all = $("#search-all-songs");
-    if (all) all.innerHTML = trackListHTML(songs, { noAlbum: false });
-    // The two lists share viewCtx.songs indices only for the first 5 rows of
-    // the short list; rebuild indices so both lists point into `songs`.
-    if (short) {
-      short.querySelectorAll(".track").forEach((row, i) => (row.dataset.idx = i));
-    }
-    highlightPlayingRow();
+    searchData = {
+      songs: data.songs || [],
+      videos: data.videos || [],
+      albums: data.albums || [],
+      singles: data.singles || [],
+      artists: data.artists || [],
+      playlists: data.playlists || [],
+    };
+    searchDataQ = q;
+    paintSearch(q);
   }).catch((err) => {
     if (token !== searchToken) return;
     view.innerHTML = `<div class="search-empty"><h3>Search failed</h3><p>${esc(err.message)}</p></div>`;
   });
 }
+
+function paintSearch(q) {
+  const d = searchData;
+  const counts = {
+    songs: d.songs.length, videos: d.videos.length, albums: d.albums.length,
+    singles: d.singles.length, artists: d.artists.length, playlists: d.playlists.length,
+  };
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+
+  setTabTitle(`“${q}”`);
+
+  if (!total) {
+    view.innerHTML = `
+      <div class="search-empty">
+        <h3>No results found for "${esc(q)}"</h3>
+        <p>Check the spelling, or try different keywords.</p>
+      </div>
+      <div id="search-suggest"></div>`;
+    viewCtx = { songs: [], playlistId: null };
+    paintSuggestions();
+    return;
+  }
+
+  // Only offer a chip for a kind that actually came back.
+  const chips = SEARCH_FILTERS
+    .filter((f) => f.id === "all" || counts[f.id])
+    .map((f) => `<button class="chip${searchFilter === f.id ? " on" : ""}" data-filter="${f.id}">${f.label}</button>`)
+    .join("");
+
+  // Whichever list the visible rows index into — the click handler reads this.
+  let rowSongs = d.songs;
+  let body;
+
+  if (searchFilter === "songs" || searchFilter === "videos") {
+    rowSongs = searchFilter === "songs" ? d.songs : d.videos;
+    body = `<div class="section">
+      <h2>${searchFilter === "songs" ? "Songs" : "Videos"}</h2>
+      <div id="search-rows"></div>
+    </div>`;
+  } else if (searchFilter === "albums") {
+    body = searchSection("Albums", `<div class="card-grid">${releaseCards(d.albums)}</div>`);
+  } else if (searchFilter === "singles") {
+    body = searchSection("Singles & EPs", `<div class="card-grid">${releaseCards(d.singles)}</div>`);
+  } else if (searchFilter === "artists") {
+    body = searchSection("Artists", `<div class="card-grid">${artistCards(d.artists)}</div>`);
+  } else if (searchFilter === "playlists") {
+    body = searchSection("Playlists", `<div class="card-grid">${ytPlaylistCards(d.playlists)}</div>`);
+  } else {
+    const top = topResult(q, d);
+    body = `
+      ${top ? `<div class="section">
+        <div class="search-top">
+          <div>
+            <h2>Top result</h2>
+            ${topResultHTML(top)}
+          </div>
+          <div>
+            <h2>Songs${counts.songs > 5 ? ` <a class="see-all" data-filter="songs">Show all</a>` : ""}</h2>
+            <div id="search-rows"></div>
+          </div>
+        </div>
+      </div>` : ""}
+      ${searchSection("Artists", counts.artists ? `<div class="card-grid">${artistCards(d.artists.slice(0, 6))}</div>` : "",
+                      counts.artists > 6 ? "artists" : "")}
+      ${searchSection("Albums", counts.albums ? `<div class="card-grid">${releaseCards(d.albums.slice(0, 10))}</div>` : "",
+                      counts.albums > 10 ? "albums" : "")}
+      ${searchSection("Singles & EPs", counts.singles ? `<div class="card-grid">${releaseCards(d.singles.slice(0, 10))}</div>` : "",
+                      counts.singles > 10 ? "singles" : "")}
+      ${searchSection("Videos", counts.videos ? `<div class="card-grid">${
+        d.videos.slice(0, 10).map((v, i) =>
+          CARD({ kind: "video", type: "single", attrs: `data-idx="${i}"`, image: v.image, title: v.title, sub: v.artist })
+        ).join("")}</div>` : "", counts.videos > 10 ? "videos" : "")}
+      ${searchSection("Playlists", counts.playlists ? `<div class="card-grid">${ytPlaylistCards(d.playlists.slice(0, 10))}</div>` : "",
+                      counts.playlists > 10 ? "playlists" : "")}`;
+  }
+
+  view.innerHTML = `
+    <div class="chip-row search-filters">${chips}</div>
+    <div id="search-suggest"></div>
+    ${body}`;
+
+  // songRadio: picking one of these plays that track and a radio from it,
+  // rather than queueing everything you were only scanning.
+  viewCtx = { songs: rowSongs, playlistId: null, songRadio: true };
+  paintSuggestions();
+
+  const rows = $("#search-rows");
+  if (rows) {
+    rows.innerHTML = trackListHTML(
+      searchFilter === "all" ? rowSongs.slice(0, 5) : rowSongs,
+      { noAlbum: searchFilter === "all" }
+    );
+  }
+  highlightPlayingRow();
+}
+
+// Chips and every "Show all" link drive the same filter.
+view.addEventListener("click", (e) => {
+  if (currentRoute !== "search") return;
+  const el = e.target.closest("[data-filter]");
+  if (!el || !searchData) return;
+  e.preventDefault();
+  searchFilter = el.dataset.filter;
+  paintSearch(state.searchQ.trim());
+});
 
 const searchInput = $("#search-input");
 let searchTimer;
@@ -4692,42 +5054,53 @@ async function renderRadio() {
   }
 }
 
-/* ---- jam view: start/join screens + live dashboard ---- */
-async function renderJamView(codeParam = "") {
+/* ---- jam view: start/join screens + live dashboard ----
+   Jam and Listen together share this view. `routeMode` says which front door
+   the user came through, and only matters before a session exists — once
+   you're in one, its own mode drives everything. */
+async function renderJamView(codeParam = "", routeMode = "speaker") {
   const code = String(codeParam || "").trim().toUpperCase();
   viewCtx = { songs: [], playlistId: null };
 
-  // someone's invite link, and we're not (yet) in that jam
+  // someone's invite link, and we're not (yet) in that session
   if (code && (!state.jam || state.jam.code !== code)) {
     view.innerHTML = `<div class="spinner"></div>`;
     let p;
     try {
       p = await api.jamPeek(code);
     } catch (err) {
-      if (currentRoute !== "jam") return;
-      view.innerHTML = `<div class="search-empty"><h3>That jam isn't on</h3>
+      if (!onJamRoute()) return;
+      const c = jamCopy(routeMode);
+      view.innerHTML = `<div class="search-empty"><h3>That ${c.noun} isn't on</h3>
         <p>${esc(err.message)}</p>
-        <p style="margin-top:16px"><a class="btn-solid" href="#/jam">Start your own</a></p></div>`;
+        <p style="margin-top:16px"><a class="btn-solid" href="${jamRoute(routeMode)}">Start your own</a></p></div>`;
       return;
     }
-    if (currentRoute !== "jam") return;
+    if (!onJamRoute()) return;
+    // the code decides which kind it is, not the link you clicked
+    const c = jamCopy(p.mode);
     view.innerHTML = `
       <div class="jam-hero">
-        <div class="jam-hero-icon">${I.group}</div>
-        <h1>${esc(p.host)} invited you to a jam</h1>
+        <div class="jam-hero-icon">${c.icon()}</div>
+        <h1>${esc(p.host)} ${c.invited}</h1>
         <p class="jam-sub">${p.members} ${p.members === 1 ? "person is" : "people are"} in${
           p.current
             ? ` · ${p.playing ? "playing" : "paused on"} <b>${esc(p.current.title)}</b> — ${esc(p.current.artist)}`
             : ""
         }</p>
-        ${inJam() ? `<p class="jam-sub">Joining moves you out of your current jam.</p>` : ""}
-        <button class="btn-solid" id="jam-join-btn">Join the jam</button>
+        ${
+          p.mode === "together"
+            ? `<p class="jam-sub">The music plays on this device, in sync with everyone else's.</p>`
+            : `<p class="jam-sub">One device plays for the room — this one is a remote unless the host hands it the audio.</p>`
+        }
+        ${inJam() ? `<p class="jam-sub">Joining moves you out of your current ${jamNoun()}.</p>` : ""}
+        <button class="btn-solid" id="jam-join-btn">${c.join}</button>
       </div>`;
     $("#jam-join-btn").onclick = async () => {
       try {
         const snap = await api.jamJoin(code);
         enterJam(snap);
-        location.hash = "#/jam"; // re-routes into the dashboard
+        location.hash = jamRoute(snap.mode); // re-routes into the dashboard
       } catch (err) {
         toast(err.message, true);
       }
@@ -4735,20 +5108,25 @@ async function renderJamView(codeParam = "") {
     return;
   }
 
-  // not in a jam: start one or join by code
+  // no session yet: start one in this route's mode, or join by code
   if (!inJam()) {
+    const c = jamCopy(routeMode);
+    const otherMode = routeMode === "together" ? "speaker" : "together";
+    const other = jamCopy(otherMode);
     view.innerHTML = `
       <div class="jam-hero">
-        <div class="jam-hero-icon">${I.group}</div>
-        <h1>Listen together</h1>
-        <p class="jam-sub">Start a jam and share the code — everyone hears the same
-          music at the same time, and anyone in the jam can add songs.</p>
-        <button class="btn-solid" id="jam-start-btn">${state.current ? "Start a jam from what's playing" : "Start a jam"}</button>
+        <div class="jam-hero-icon">${c.icon()}</div>
+        <h1>${c.title}</h1>
+        <p class="jam-sub">${c.blurb}</p>
+        <button class="btn-solid" id="jam-start-btn">${state.current ? c.startFrom : c.start}</button>
         <div class="jam-join-row">
           <input id="jam-code-input" maxlength="6" placeholder="Have a code?"
             autocomplete="off" spellcheck="false">
           <button class="btn-ghost" id="jam-join-code-btn">Join</button>
         </div>
+        <p class="jam-sub" style="margin-top:18px">Not what you wanted?
+          <a href="${jamRoute(otherMode)}">${other.title}</a>
+          is for when you're ${routeMode === "together" ? "in the same room" : "apart"}.</p>
       </div>`;
     $("#jam-start-btn").onclick = async () => {
       try {
@@ -4760,21 +5138,23 @@ async function renderJamView(codeParam = "") {
               playing: !audio.paused,
             }
           : {};
-        const snap = await api.jamCreate(seed);
+        const snap = await api.jamCreate(seed, routeMode);
         enterJam(snap, { quiet: true });
-        renderJamView();
-        toast("Jam started — share the code");
+        renderJamView("", routeMode);
+        toast(c.started);
       } catch (err) {
         toast(err.message, true);
       }
     };
     const joinByCode = async () => {
-      const c = $("#jam-code-input").value.trim();
-      if (!c) return;
+      const typed = $("#jam-code-input").value.trim();
+      if (!typed) return;
       try {
-        const snap = await api.jamJoin(c);
+        const snap = await api.jamJoin(typed);
         enterJam(snap);
-        renderJamView();
+        // a code can be for either kind — land on the matching route
+        if (snap.mode !== routeMode) location.hash = jamRoute(snap.mode);
+        else renderJamView("", routeMode);
       } catch (err) {
         toast(err.message, true);
       }
@@ -4786,15 +5166,17 @@ async function renderJamView(codeParam = "") {
     return;
   }
 
-  // in the jam: the dashboard
+  // in a session: the dashboard
   const j = state.jam;
   const host = jamIsHost();
   const cur = jamSong();
+  const c = jamCopy(jamMode());
+  const listening = j.members.filter((m) => m.connected).length;
   view.innerHTML = `
     <div class="jam-dash">
       <div class="jam-code-card">
         <div class="jam-code-main">
-          <div class="jam-code-label">Join code</div>
+          <div class="jam-code-label">${c.title} · join code</div>
           <div class="jam-code">${esc(j.code)}</div>
           <div class="jam-sub">${
             cur
@@ -4808,7 +5190,15 @@ async function renderJamView(codeParam = "") {
         </div>
       </div>
 
-      <div class="jam-speaker-row${isJamSpeaker() || j.speakerOnline ? "" : " warn"}">
+      ${
+        isTogether()
+          ? `<div class="jam-speaker-row">
+        <span class="jam-speaker-icon">${I.volume}</span>
+        <span class="jam-speaker-text">Playing on <b>every device</b> —
+          ${listening} ${listening === 1 ? "person is" : "people are"} hearing this
+          right now, in sync. Voice chat is on you.</span>
+      </div>`
+          : `<div class="jam-speaker-row${isJamSpeaker() || j.speakerOnline ? "" : " warn"}">
         <span class="jam-speaker-icon">${I.volume}</span>
         <span class="jam-speaker-text">${
           isJamSpeaker()
@@ -4818,10 +5208,11 @@ async function renderJamView(codeParam = "") {
             : "No device is playing the audio right now"
         }</span>
         ${host && !isJamSpeaker() ? `<button class="btn-solid" id="jam-claim-btn">Play here</button>` : ""}
-      </div>
+      </div>`
+      }
 
       <div class="section">
-        <h2>${j.members.length} in the jam</h2>
+        <h2>${j.members.length} ${isTogether() ? "listening together" : "in the jam"}</h2>
         <div class="jam-members">
           ${j.members
             .map(
@@ -4850,19 +5241,19 @@ async function renderJamView(codeParam = "") {
         <label class="jam-setting">
           <input type="checkbox" id="jam-set-autoplay" ${j.settings.autoplay ? "checked" : ""}>
           <span>Autoplay
-            <span class="jam-sub">Keep the jam going with similar songs when the queue runs out.</span></span>
+            <span class="jam-sub">Keep the music going with similar songs when the queue runs out.</span></span>
         </label>
       </div>`
           : ""
       }
 
       <div class="jam-leave-row">
-        ${host ? `<button class="btn-ghost danger-text" id="jam-end-btn">End jam for everyone</button>` : ""}
-        <button class="btn-ghost" id="jam-leave-btn">Leave the jam</button>
+        ${host ? `<button class="btn-ghost danger-text" id="jam-end-btn">End for everyone</button>` : ""}
+        <button class="btn-ghost" id="jam-leave-btn">Leave</button>
       </div>
     </div>`;
 
-  const shareUrl = `${location.origin}/#/jam/${j.code}`;
+  const shareUrl = `${location.origin}/${jamRoute(jamMode())}/${j.code}`;
   const copy = async (text, okMsg) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -4891,17 +5282,19 @@ async function renderJamView(codeParam = "") {
   const endBtn = $("#jam-end-btn");
   if (endBtn)
     endBtn.onclick = async () => {
+      const noun = jamNoun();
       try {
         await api.jamEnd();
-        exitJamMode("Jam ended");
+        exitJamMode(`Ended the ${noun}`);
       } catch (err) {
         toast(err.message, true);
       }
     };
   $("#jam-leave-btn").onclick = async () => {
+    const noun = jamNoun();
     try {
       await api.jamLeave();
-      exitJamMode("Left the jam");
+      exitJamMode(`Left the ${noun}`);
     } catch (err) {
       toast(err.message, true);
     }
@@ -5048,7 +5441,8 @@ async function loadDiscoverFeed() {
       // "For you" leans on what you've actually played before falling back to
       // whatever is trending, so a cold account still has something to swipe.
       const seed = state.library.history[0] || state.library.liked[0];
-      if (seed) songs = (await api.reco(seed.id)).songs || [];
+      // /api/reco answers with the track list itself, not a wrapper
+      if (seed) songs = await api.reco(seed.id).catch(() => []);
       if (!songs.length) songs = (await api.get("/api/trending")).singles || [];
     } else {
       songs = (await api.search(filter.seed)).songs || [];
@@ -5883,7 +6277,7 @@ view.addEventListener("click", (e) => {
    Card rows scroll in place on desktop instead of shoving you onto a "show
    all" page just to see the sixth item. */
 function mountShelfControls(root = view) {
-  root.querySelectorAll(".card-grid.shelf").forEach((grid) => {
+  root.querySelectorAll(".shelf").forEach((grid) => {
     if (grid.dataset.shelfMounted) return;
     grid.dataset.shelfMounted = "1";
     const wrap = document.createElement("div");
@@ -5968,7 +6362,10 @@ function router() {
     case "smart": renderSmart(decodeURIComponent(param)); break;
     case "trending": renderTrending(); break;
     case "radio": renderRadio(); break;
-    case "jam": renderJamView(param); break;
+    // one view, two front doors: #/jam is the same-room feature, #/together
+    // the remote one. Inside a session both show its dashboard.
+    case "jam": renderJamView(param, "speaker"); break;
+    case "together": renderJamView(param, "together"); break;
     case "library": renderLibrary(); break;
     // Member management moved into Profile; keep the old route pointing there.
     case "admin": location.replace("#/profile"); break;
