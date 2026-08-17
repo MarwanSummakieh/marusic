@@ -1,16 +1,28 @@
 # Marusic behind a Cloudflare tunnel — designed for a NAS.
 #
-#   1. cp .env.example .env   and fill in ADMIN_*, TUNNEL_TOKEN
-#   2. docker compose up -d --build
-#   3. In Cloudflare Zero Trust → Networks → Tunnels, point the tunnel's
+#   1. curl -O https://raw.githubusercontent.com/MarwanSummakieh/marusic/main/docker-compose.yml
+#      curl -o .env https://raw.githubusercontent.com/MarwanSummakieh/marusic/main/.env.example
+#   2. edit .env — ADMIN_EMAIL, ADMIN_PASSWORD, TUNNEL_TOKEN
+#   3. docker compose up -d
+#   4. In Cloudflare Zero Trust → Networks → Tunnels, point the tunnel's
 #      public hostname at  http://marusic:3000  (service URL, not localhost —
 #      cloudflared reaches the app over the compose network).
+#
+# To update:
+#   docker compose pull && docker compose up -d
+#
+# There is no source checkout and no build step. The image is built by GitHub
+# Actions for linux/amd64 and linux/arm64 and published to GHCR, so the NAS
+# only ever pulls. Working on the code instead? Add the build override:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 #
 # Compose reads ${VARS} from the .env file in this directory; the real .env is
 # gitignored, so the tunnel token and admin password never land in the repo.
 services:
   marusic:
-    build: .
+    # Pin a release by setting MARUSIC_TAG in .env (e.g. MARUSIC_TAG=1.4).
+    # Left alone it follows `latest`, which moves on every v* tag.
+    image: ghcr.io/marwansummakieh/marusic:${MARUSIC_TAG:-latest}
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -22,13 +34,43 @@ services:
       LOSSLESS_API_BASE: ${LOSSLESS_API_BASE:-}
     volumes:
       - marusic-data:/app/data
+    labels:
+      # Only meaningful with the `autoupdate` profile below.
+      com.centurylinklabs.watchtower.enable: "true"
+    # node, not curl or wget: the image purges curl after fetching yt-dlp and
+    # node 22 has a global fetch, so this needs nothing the image lacks.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     command: tunnel run --token ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
     depends_on:
-      - marusic
+      marusic:
+        # Hold the tunnel until the app answers, so the first request through a
+        # freshly started stack is not a 502 from a connector that came up first.
+        condition: service_healthy
+
+  # Opt-in automatic updates:  docker compose --profile autoupdate up -d
+  # Checks GHCR every 6 h and restarts marusic in place when `latest` moves.
+  # Leave it off to update by hand with `docker compose pull` — on a box you
+  # actually listen to music on, deciding when it restarts is worth something.
+  #
+  # Scoped by label rather than by container name, because the name is derived
+  # from the directory this file sits in and would silently stop matching if
+  # the folder were ever renamed. cloudflared is deliberately not labelled.
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    profiles: ["autoupdate"]
+    command: --cleanup --label-enable --interval 21600
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   marusic-data:

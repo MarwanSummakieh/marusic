@@ -1,0 +1,15 @@
+# Build from this checkout instead of pulling the published image.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# docker-compose.yml on its own is the NAS path: pull, never build. This
+# override is for working on the code, or for running a fork whose image is
+# not published anywhere. The tag is local-only and never pushed, so it cannot
+# collide with anything in GHCR.
+services:
+  marusic:
+    build: .
+    image: marusic:local
+    # A local build has no upstream to be newer than it.
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"

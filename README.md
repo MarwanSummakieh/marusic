@@ -242,25 +242,51 @@ CI runs the same suite on every push (`.github/workflows/ci.yml`).
 
 ## Docker
 
+The image is published to GHCR for `linux/amd64` and `linux/arm64` on every
+`v*` release, so nothing has to be built to run it:
+
 ```bash
-docker build -t marusic .
 docker run -p 3000:3000 \
   -e ADMIN_EMAIL=you@example.com -e ADMIN_PASSWORD=something-strong \
-  -v marusic-data:/app/data marusic
+  -v marusic-data:/app/data ghcr.io/marwansummakieh/marusic:latest
 ```
 
-The image bundles the standalone yt-dlp binary (amd64 and arm64); ffmpeg comes
-from `ffmpeg-static`. Production refuses to boot without real admin credentials.
+| Tag | What it is |
+| --- | --- |
+| `latest` | the newest `v*` release — the default |
+| `1.4.2`, `1.4` | that release, pinned |
+| `edge` (or `main`) | the tip of `main`, built on every push |
+
+The image bundles the standalone yt-dlp binary; ffmpeg comes from
+`ffmpeg-static`. Production refuses to boot without real admin credentials.
+Building it yourself is still one command — `docker build -t marusic .`.
 
 ## NAS + Cloudflare tunnel
 
 `docker-compose.yml` runs the app plus a `cloudflared` connector, so nothing
-is port-forwarded and the app gets HTTPS (which the PWA install needs):
+is port-forwarded and the app gets HTTPS (which the PWA install needs). The
+NAS needs two files and no source checkout:
 
 ```bash
-cp .env.example .env    # fill in ADMIN_EMAIL, ADMIN_PASSWORD, TUNNEL_TOKEN
-docker compose up -d --build
+curl -O https://raw.githubusercontent.com/MarwanSummakieh/marusic/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/MarwanSummakieh/marusic/main/.env.example
+# edit .env — ADMIN_EMAIL, ADMIN_PASSWORD, TUNNEL_TOKEN
+docker compose up -d
 ```
+
+Updating is then two commands, and the same two forever:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+The library survives it — the SQLite database lives in the `marusic-data`
+volume, not in the container. To have it update itself instead, start the
+stack with `docker compose --profile autoupdate up -d` and a Watchtower
+container will check GHCR every six hours.
+
+Pin a version by setting `MARUSIC_TAG` in `.env` (`MARUSIC_TAG=1.4`); left
+unset it follows `latest`.
 
 The tunnel token goes in `.env` as `TUNNEL_TOKEN` (Cloudflare Zero Trust →
 Networks → Tunnels → your tunnel → the token from the connector command).
@@ -271,6 +297,12 @@ In the tunnel's **Public hostname** settings, point your hostname at
 The compose file sets `TRUST_PROXY=1`; behind the tunnel every request
 arrives from cloudflared's IP, and without trust-proxy the login rate limiter
 would count all users as one client.
+
+To run a working copy instead of the published image, add the build override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ## Android app + Android Auto
 
@@ -326,8 +358,9 @@ cd android && ./gradlew assembleRelease
 ```
 
 `.github/workflows/build.yml` packages both halves on pushes to `main`,
-`v*` tags, and manual dispatch: the server's Docker image (pushed to GHCR on
-tags), a debug APK artifact always, and a signed release APK artifact when
+`v*` tags, and manual dispatch: the server's multi-arch Docker image (pushed
+to GHCR as `edge` from `main` and as `latest` + the semver tags from a `v*`
+tag), a debug APK artifact always, and a signed release APK artifact when
 these repo secrets exist:
 
 | Secret | Value |

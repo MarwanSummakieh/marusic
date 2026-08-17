@@ -14,6 +14,9 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Publishes ghcr.io/marwansummakieh/marusic, which is what docker-compose.yml
+  # pulls. A NAS never builds this itself: it has no toolchain, and emulating an
+  # arm64 npm install on a two-core Celeron is not a thing anyone should wait for.
   server-image:
     runs-on: ubuntu-latest
     permissions:
@@ -21,30 +24,48 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # QEMU, for the arm64 half of the manifest. Most NAS boxes that are not
+      # x86 Synology/QNAP are ARM, and an amd64-only image fails on them with
+      # "no matching manifest" — which is exactly the error that makes a
+      # published image useless to the person it was published for.
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
-        if: startsWith(github.ref, 'refs/tags/')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Two moving tags and the pinnable ones:
+      #   latest        the newest v* release   — what compose defaults to
+      #   1.4.2 / 1.4   that release, pinned    — MARUSIC_TAG=1.4 in .env
+      #   edge, main    the tip of main         — for trying a fix before a tag
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=tag
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
-      # Every push validates the image builds; tags also push it to GHCR.
-      - name: Build (push on tags)
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=edge,branch=main
+            type=ref,event=branch
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ startsWith(github.ref, 'refs/tags/') }}
+          platforms: linux/amd64,linux/arm64
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Without a cache every push re-runs the emulated arm64 `npm ci`.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Attestations add unknown/unknown entries to the manifest list that
+          # the older Docker on DSM 7 / QTS reads as a platform it cannot match.
+          # A NAS that cannot pull the image is a worse trade than provenance.
+          provenance: false
 
   android-apk:
     runs-on: ubuntu-latest
