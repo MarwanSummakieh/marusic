@@ -31,6 +31,11 @@ services:
       # All requests arrive from cloudflared's IP; without this the login
       # rate limiter would throttle every user as one client.
       TRUST_PROXY: "1"
+      # Set FORCE_IPV4=1 in .env if streams 502 with `upstream=403` in the
+      # logs: on a dual-stack line the yt-dlp resolve and our fetch of the
+      # resulting URL can leave by different addresses, and Google binds
+      # that URL to whichever one asked for it.
+      FORCE_IPV4: ${FORCE_IPV4:-}
       LOSSLESS_API_BASE: ${LOSSLESS_API_BASE:-}
     volumes:
       - marusic-data:/app/data

@@ -1,5 +1,7 @@
 import express from "express";
+import dns from "node:dns";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -16,6 +18,18 @@ import {
   makeCastToken,
   verifyCastToken,
 } from "./lib/security.js";
+
+// FORCE_IPV4: pin outbound connections to IPv4 before anything can fetch.
+// Node races IPv4 and IPv6 (Happy Eyeballs) and keeps whichever answers
+// first, so on a dual-stack line our fetch can leave over IPv6 while the
+// yt-dlp resolve left over IPv4 — and a googlevideo URL is only valid from
+// the address that requested it. Disabling the race and preferring A
+// records makes both legs agree. Off unless the deployment sets it.
+if (config.forceIpv4) {
+  net.setDefaultAutoSelectFamily(false);
+  dns.setDefaultResultOrder("ipv4first");
+  console.log("  FORCE_IPV4 is on: outbound connections pinned to IPv4.");
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSION_MAX_AGE = config.sessionMaxAgeDays * 24 * 60 * 60 * 1000;
