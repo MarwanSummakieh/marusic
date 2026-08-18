@@ -775,6 +775,20 @@ app.get("/api/stream/:id", streamAuth, wrap(async (req, res) => {
   }
   if (upstream.status >= 400 || !upstream.body) {
     urlCache.delete(`${req.params.id}:${quality}`);
+    // Refused even after a fresh re-resolve. A googlevideo URL is minted for
+    // one IP and expires within hours, so the two facts worth having are
+    // which address it was issued to and whether it was already stale — if
+    // boundIp is not this box's public address, the resolve and the fetch
+    // are leaving by different routes (classically IPv4 vs IPv6) and Google
+    // is right to refuse. Logged because a 502 in a console says none of it.
+    let q = new URLSearchParams();
+    try { q = new URL(url).searchParams; } catch {}
+    const expire = Number(q.get("expire")) * 1000;
+    console.error(
+      `[stream] ${req.params.id} q=${quality} upstream=${upstream.status} ` +
+        `boundIp=${q.get("ip") || "?"} client=${q.get("c") || "?"}` +
+        (expire ? ` expired=${expire < Date.now()}` : "")
+    );
     return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
   }
 
