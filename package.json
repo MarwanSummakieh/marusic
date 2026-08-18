@@ -1,6 +1,6 @@
 {
   "name": "marusic",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Spotify-style web player for YouTube Music (youtubei.js + yt-dlp), ported from involvex/youtube-music-cli",
   "type": "module",
   "main": "server.js",

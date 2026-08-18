@@ -25,11 +25,15 @@ import {
 // yt-dlp resolve left over IPv4 — and a googlevideo URL is only valid from
 // the address that requested it. Disabling the race and preferring A
 // records makes both legs agree. Off unless the deployment sets it.
-if (config.forceIpv4) {
+let ipv4Pinned = false;
+function pinIpv4(why) {
+  if (ipv4Pinned) return;
+  ipv4Pinned = true;
   net.setDefaultAutoSelectFamily(false);
   dns.setDefaultResultOrder("ipv4first");
-  console.log("  FORCE_IPV4 is on: outbound connections pinned to IPv4.");
+  console.log(`  Outbound connections pinned to IPv4 (${why}).`);
 }
+if (config.forceIpv4) pinIpv4("FORCE_IPV4");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSION_MAX_AGE = config.sessionMaxAgeDays * 24 * 60 * 60 * 1000;
@@ -748,11 +752,11 @@ const STREAM_QUALITIES = new Set(["low", "medium", "high", "sonos"]);
 const URL_TTL_MS = 4 * 60 * 60 * 1000;
 const urlCache = new Map(); // `${id}:${quality}` -> { url, exp }
 
-async function resolveStreamUrl(id, quality, fresh = false) {
+async function resolveStreamUrl(id, quality, fresh = false, ipv4 = false) {
   const key = `${id}:${quality}`;
   const hit = urlCache.get(key);
   if (!fresh && hit && hit.exp > Date.now()) return hit.url;
-  const url = await ytm.getStreamUrl(id, quality);
+  const url = await ytm.getStreamUrl(id, quality, { ipv4 });
   urlCache.set(key, { url, exp: Date.now() + URL_TTL_MS });
   return url;
 }
@@ -787,6 +791,20 @@ app.get("/api/stream/:id", streamAuth, wrap(async (req, res) => {
     url = await resolveStreamUrl(req.params.id, quality, true);
     upstream = await fetch(url, { headers });
   }
+  // Refused even after a fresh re-resolve, and the URL had not expired: the
+  // likeliest remaining cause is that yt-dlp asked from one address and this
+  // fetch left from another, which happens on a dual-stack host when Node
+  // wins its Happy Eyeballs race over IPv6. Google binds the URL to whoever
+  // asked, so it is right to refuse. Pin to IPv4 and try once more rather
+  // than making someone read logs and set a flag to discover this.
+  if ((upstream.status === 403 || upstream.status === 401) && !ipv4Pinned) {
+    pinIpv4("a stream URL was refused; suspecting a split egress");
+    url = await resolveStreamUrl(req.params.id, quality, true, true);
+    upstream = await fetch(url, { headers });
+    if (upstream.status < 400 && upstream.body)
+      console.log(`[stream] ${req.params.id}: recovered after pinning to IPv4`);
+  }
+
   if (upstream.status >= 400 || !upstream.body) {
     urlCache.delete(`${req.params.id}:${quality}`);
     // Refused even after a fresh re-resolve. A googlevideo URL is minted for
