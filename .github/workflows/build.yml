@@ -51,12 +51,24 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=edge,branch=main
             type=ref,event=branch
+      # Which yt-dlp goes in the image. Resolved here rather than left to
+      # `latest` inside the Dockerfile so the value lands in the layer's cache
+      # key: without it the install layer is reused across every build and the
+      # extractor ages inside an image that looks new.
+      - name: Resolve the current yt-dlp release
+        id: ytdlp
+        run: |
+          tag=$(curl -fsSL https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest | jq -r .tag_name)
+          echo "Using yt-dlp $tag"
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            YTDLP_VERSION=${{ steps.ytdlp.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Without a cache every push re-runs the emulated arm64 `npm ci`.

@@ -36,6 +36,9 @@ services:
       # resulting URL can leave by different addresses, and Google binds
       # that URL to whichever one asked for it.
       FORCE_IPV4: ${FORCE_IPV4:-}
+      # Order of YouTube player clients to fall back through when a stream
+      # is refused. Only consulted after a failure; the winner is reused.
+      STREAM_CLIENTS: ${STREAM_CLIENTS:-}
       LOSSLESS_API_BASE: ${LOSSLESS_API_BASE:-}
     volumes:
       - marusic-data:/app/data

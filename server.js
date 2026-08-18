@@ -752,11 +752,18 @@ const STREAM_QUALITIES = new Set(["low", "medium", "high", "sonos"]);
 const URL_TTL_MS = 4 * 60 * 60 * 1000;
 const urlCache = new Map(); // `${id}:${quality}` -> { url, exp }
 
-async function resolveStreamUrl(id, quality, fresh = false, ipv4 = false) {
-  const key = `${id}:${quality}`;
+// The player client that last produced a working URL. yt-dlp's default is
+// fine until YouTube changes its mind about it; once a fallback works there is
+// no reason to keep paying for the failures that found it.
+let preferredClient = "";
+
+async function resolveStreamUrl(id, quality, { fresh = false, ipv4 = false, client = preferredClient } = {}) {
+  // the client is part of the identity of a resolved URL, not a detail of how
+  // it was fetched — two clients hand back genuinely different URLs
+  const key = `${id}:${quality}:${client}`;
   const hit = urlCache.get(key);
   if (!fresh && hit && hit.exp > Date.now()) return hit.url;
-  const src = await ytm.getStreamSource(id, quality, { ipv4 });
+  const src = await ytm.getStreamSource(id, quality, { ipv4, client });
   urlCache.set(key, { url: src, exp: Date.now() + URL_TTL_MS });
   return src;
 }
@@ -791,25 +798,50 @@ app.get("/api/stream/:id", streamAuth, wrap(async (req, res) => {
   let upstream = await fetch(src.url, { headers: withRange(src) });
   if (upstream.status >= 400 || !upstream.body) {
     // stale/expired URL — re-resolve once and retry
-    src = await resolveStreamUrl(req.params.id, quality, true);
+    src = await resolveStreamUrl(req.params.id, quality, { fresh: true });
     upstream = await fetch(src.url, { headers: withRange(src) });
   }
-  // Refused even after a fresh re-resolve, and the URL had not expired: the
-  // likeliest remaining cause is that yt-dlp asked from one address and this
-  // fetch left from another, which happens on a dual-stack host when Node
-  // wins its Happy Eyeballs race over IPv6. Google binds the URL to whoever
-  // asked, so it is right to refuse. Pin to IPv4 and try once more rather
-  // than making someone read logs and set a flag to discover this.
+
+  // Refused even after a fresh re-resolve, and the URL had not expired. One
+  // cheap possibility first: the resolve and this fetch left by different
+  // addresses, which happens on a dual-stack host when Node wins its Happy
+  // Eyeballs race over IPv6. Google mints the URL for whoever asked, so it is
+  // right to refuse. One extra resolve, spent on a request already failing.
   if ((upstream.status === 403 || upstream.status === 401) && !ipv4Pinned) {
     pinIpv4("a stream URL was refused; suspecting a split egress");
-    src = await resolveStreamUrl(req.params.id, quality, true, true);
+    src = await resolveStreamUrl(req.params.id, quality, { fresh: true, ipv4: true });
     upstream = await fetch(src.url, { headers: withRange(src) });
     if (upstream.status < 400 && upstream.body)
       console.log(`[stream] ${req.params.id}: recovered after pinning to IPv4`);
   }
 
+  // Still refused: the player client yt-dlp chose is no longer one YouTube
+  // will serve. Work down the ladder and keep whichever answers, so the next
+  // request pays nothing for this discovery.
+  if (upstream.status === 403 || upstream.status === 401) {
+    for (const client of ytm.STREAM_CLIENTS) {
+      if (client === preferredClient) continue; // already the failing one
+      try {
+        const alt = await resolveStreamUrl(req.params.id, quality, { fresh: true, client });
+        const res2 = await fetch(alt.url, { headers: withRange(alt) });
+        if (res2.status < 400 && res2.body) {
+          preferredClient = client;
+          src = alt;
+          upstream = res2;
+          console.log(`[stream] ${req.params.id}: recovered with player_client=${client}`);
+          break;
+        }
+      } catch (err) {
+        // an unknown or broken client is not fatal — try the next one
+        console.error(`[stream] player_client=${client} failed: ${err.message.slice(0, 120)}`);
+      }
+    }
+  }
+
   if (upstream.status >= 400 || !upstream.body) {
-    urlCache.delete(`${req.params.id}:${quality}`);
+    // the key carries the client now, so clear every variant for this track
+    for (const k of [...urlCache.keys()])
+      if (k.startsWith(`${req.params.id}:${quality}:`)) urlCache.delete(k);
     // Refused even after a fresh re-resolve. A googlevideo URL is minted for
     // one IP and expires within hours, so the two facts worth having are
     // which address it was issued to and whether it was already stale — if
@@ -1267,4 +1299,8 @@ setInterval(() => jam.sweepJams(10 * 60 * 1000), 60 * 1000).unref?.();
 
 app.listen(config.port, () => {
   console.log(`Marusic running at http://localhost:${config.port}`);
+  // The Docker layer that installs yt-dlp is cached, so a freshly built
+  // image can still carry a months-old extractor — and a stale extractor
+  // hands back URLs YouTube then refuses. Say which one is aboard.
+  ytm.ytdlpVersion().then((v) => console.log(`  yt-dlp ${v}`));
 });
