@@ -756,9 +756,9 @@ async function resolveStreamUrl(id, quality, fresh = false, ipv4 = false) {
   const key = `${id}:${quality}`;
   const hit = urlCache.get(key);
   if (!fresh && hit && hit.exp > Date.now()) return hit.url;
-  const url = await ytm.getStreamUrl(id, quality, { ipv4 });
-  urlCache.set(key, { url, exp: Date.now() + URL_TTL_MS });
-  return url;
+  const src = await ytm.getStreamSource(id, quality, { ipv4 });
+  urlCache.set(key, { url: src, exp: Date.now() + URL_TTL_MS });
+  return src;
 }
 
 // A UPnP renderer probes the URL with HEAD *inside* SetAVTransportURI and
@@ -781,15 +781,18 @@ app.head("/api/stream/:id", streamAuth, (req, res) => {
 // (same-origin); a Chromecast authenticates with ?t=<cast token> instead.
 app.get("/api/stream/:id", streamAuth, wrap(async (req, res) => {
   const quality = STREAM_QUALITIES.has(req.query.q) ? req.query.q : "high";
-  const headers = { "User-Agent": ytm.UA };
-  if (req.headers.range) headers.Range = req.headers.range;
+  // Whatever headers yt-dlp says this URL needs, plus the browser's Range.
+  // Inventing our own User-Agent here is what produced 403s from some
+  // addresses and not others.
+  const withRange = (src) =>
+    req.headers.range ? { ...src.headers, Range: req.headers.range } : { ...src.headers };
 
-  let url = await resolveStreamUrl(req.params.id, quality);
-  let upstream = await fetch(url, { headers });
+  let src = await resolveStreamUrl(req.params.id, quality);
+  let upstream = await fetch(src.url, { headers: withRange(src) });
   if (upstream.status >= 400 || !upstream.body) {
     // stale/expired URL — re-resolve once and retry
-    url = await resolveStreamUrl(req.params.id, quality, true);
-    upstream = await fetch(url, { headers });
+    src = await resolveStreamUrl(req.params.id, quality, true);
+    upstream = await fetch(src.url, { headers: withRange(src) });
   }
   // Refused even after a fresh re-resolve, and the URL had not expired: the
   // likeliest remaining cause is that yt-dlp asked from one address and this
@@ -799,8 +802,8 @@ app.get("/api/stream/:id", streamAuth, wrap(async (req, res) => {
   // than making someone read logs and set a flag to discover this.
   if ((upstream.status === 403 || upstream.status === 401) && !ipv4Pinned) {
     pinIpv4("a stream URL was refused; suspecting a split egress");
-    url = await resolveStreamUrl(req.params.id, quality, true, true);
-    upstream = await fetch(url, { headers });
+    src = await resolveStreamUrl(req.params.id, quality, true, true);
+    upstream = await fetch(src.url, { headers: withRange(src) });
     if (upstream.status < 400 && upstream.body)
       console.log(`[stream] ${req.params.id}: recovered after pinning to IPv4`);
   }
@@ -814,7 +817,7 @@ app.get("/api/stream/:id", streamAuth, wrap(async (req, res) => {
     // are leaving by different routes (classically IPv4 vs IPv6) and Google
     // is right to refuse. Logged because a 502 in a console says none of it.
     let q = new URLSearchParams();
-    try { q = new URL(url).searchParams; } catch {}
+    try { q = new URL(src.url).searchParams; } catch {}
     const expire = Number(q.get("expire")) * 1000;
     console.error(
       `[stream] ${req.params.id} q=${quality} upstream=${upstream.status} ` +
