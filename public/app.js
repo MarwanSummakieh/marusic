@@ -1671,8 +1671,10 @@ const JAM_COPY = {
 const jamCopy = (mode) => JAM_COPY[mode] || JAM_COPY.speaker;
 // what the session is called in front of the user
 const jamNoun = () => jamCopy(jamMode()).noun;
-// the route that shows a given session
-const jamRoute = (mode) => `#/${jamCopy(mode).route}`;
+// Both kinds live behind the one Jam entry, so a session's link is the same
+// either way; peek() reports the kind, so a join screen still frames itself
+// correctly whichever sort of code you were handed.
+const jamRoute = () => "#/jam";
 const onJamRoute = () => currentRoute === "jam" || currentRoute === "together";
 
 // One device per jam makes the sound — the tab that created it (or that the
@@ -2039,7 +2041,7 @@ function jamOpenEvents() {
     applyAutoplayUI();
     renderJamChip();
     renderQueuePanel();
-    if (onJamRoute()) renderJamView("", jamMode());
+    if (onJamRoute()) renderJamView();
   });
 
   es.addEventListener("sync", (e) => {
@@ -2051,7 +2053,7 @@ function jamOpenEvents() {
     jamAdoptOffset(s.now);
     jamApplyPlayback();
     renderQueuePanel();
-    if (onJamRoute()) renderJamView("", jamMode());
+    if (onJamRoute()) renderJamView();
   });
 
   es.addEventListener("queue", (e) => {
@@ -2068,7 +2070,7 @@ function jamOpenEvents() {
     }
     jamApplyPlayback(); // a removal can shift the index
     renderQueuePanel();
-    if (onJamRoute()) renderJamView("", jamMode());
+    if (onJamRoute()) renderJamView();
   });
 
   es.addEventListener("members", (e) => {
@@ -2091,7 +2093,7 @@ function jamOpenEvents() {
       toast(note.left ? `${note.left} left — ${note.name} hosts the ${noun} now` : `${note.name} hosts the ${noun} now`);
     renderJamChip();
     renderQueuePanel();
-    if (onJamRoute()) renderJamView("", jamMode());
+    if (onJamRoute()) renderJamView();
   });
 
   es.addEventListener("settings", (e) => {
@@ -2099,7 +2101,7 @@ function jamOpenEvents() {
     state.jam.settings = parse(e).settings;
     applyAutoplayUI();
     renderQueuePanel();
-    if (onJamRoute()) renderJamView("", jamMode());
+    if (onJamRoute()) renderJamView();
   });
 
   es.addEventListener("jam-ended", () =>
@@ -5055,10 +5057,9 @@ async function renderRadio() {
 }
 
 /* ---- jam view: start/join screens + live dashboard ----
-   Jam and Listen together share this view. `routeMode` says which front door
-   the user came through, and only matters before a session exists — once
-   you're in one, its own mode drives everything. */
-async function renderJamView(codeParam = "", routeMode = "speaker") {
+   Jam and Listen together are one screen: a toggle picks which kind you are
+   about to start, and a session in progress simply shows its own. */
+async function renderJamView(codeParam = "") {
   const code = String(codeParam || "").trim().toUpperCase();
   viewCtx = { songs: [], playlistId: null };
 
@@ -5070,10 +5071,9 @@ async function renderJamView(codeParam = "", routeMode = "speaker") {
       p = await api.jamPeek(code);
     } catch (err) {
       if (!onJamRoute()) return;
-      const c = jamCopy(routeMode);
-      view.innerHTML = `<div class="search-empty"><h3>That ${c.noun} isn't on</h3>
+      view.innerHTML = `<div class="search-empty"><h3>That session isn't on</h3>
         <p>${esc(err.message)}</p>
-        <p style="margin-top:16px"><a class="btn-solid" href="${jamRoute(routeMode)}">Start your own</a></p></div>`;
+        <p style="margin-top:16px"><a class="btn-solid" href="${jamRoute()}">Start your own</a></p></div>`;
       return;
     }
     if (!onJamRoute()) return;
@@ -5108,61 +5108,78 @@ async function renderJamView(codeParam = "", routeMode = "speaker") {
     return;
   }
 
-  // no session yet: start one in this route's mode, or join by code
+  // No session yet. One screen, one toggle: the two kinds differ only in where
+  // the sound comes out, which is a choice you make once at the start — not
+  // two separate destinations to navigate between.
   if (!inJam()) {
-    const c = jamCopy(routeMode);
-    const otherMode = routeMode === "together" ? "speaker" : "together";
-    const other = jamCopy(otherMode);
-    view.innerHTML = `
-      <div class="jam-hero">
-        <div class="jam-hero-icon">${c.icon()}</div>
-        <h1>${c.title}</h1>
-        <p class="jam-sub">${c.blurb}</p>
-        <button class="btn-solid" id="jam-start-btn">${state.current ? c.startFrom : c.start}</button>
-        <div class="jam-join-row">
-          <input id="jam-code-input" maxlength="6" placeholder="Have a code?"
-            autocomplete="off" spellcheck="false">
-          <button class="btn-ghost" id="jam-join-code-btn">Join</button>
-        </div>
-        <p class="jam-sub" style="margin-top:18px">Not what you wanted?
-          <a href="${jamRoute(otherMode)}">${other.title}</a>
-          is for when you're ${routeMode === "together" ? "in the same room" : "apart"}.</p>
-      </div>`;
-    $("#jam-start-btn").onclick = async () => {
-      try {
-        const seed = state.current
-          ? {
-              queue: state.queue.slice(0, 500),
-              index: state.qIndex,
-              pos: audio.currentTime || 0,
-              playing: !audio.paused,
-            }
-          : {};
-        const snap = await api.jamCreate(seed, routeMode);
-        enterJam(snap, { quiet: true });
-        renderJamView("", routeMode);
-        toast(c.started);
-      } catch (err) {
-        toast(err.message, true);
-      }
+    const paint = () => {
+      const mode = prefs.jamMode === "together" ? "together" : "speaker";
+      const c = jamCopy(mode);
+      view.innerHTML = `
+        <div class="jam-hero">
+          <div class="jam-hero-icon">${c.icon()}</div>
+          <h1>Listen with friends</h1>
+          <span class="seg jam-mode-seg">
+            <button data-jam-mode="speaker" class="${mode === "speaker" ? "on" : ""}">${I.group} Jam</button>
+            <button data-jam-mode="together" class="${mode === "together" ? "on" : ""}">${I.volume} Listen together</button>
+          </span>
+          <p class="jam-sub jam-mode-blurb">${c.blurb}</p>
+          <button class="btn-solid" id="jam-start-btn">${state.current ? c.startFrom : c.start}</button>
+          <div class="jam-join-row">
+            <input id="jam-code-input" maxlength="6" placeholder="Have a code?"
+              autocomplete="off" spellcheck="false">
+            <button class="btn-ghost" id="jam-join-code-btn">Join</button>
+          </div>
+        </div>`;
+
+      // the toggle only changes what you are about to start — a session's own
+      // kind is fixed once it exists, since moving the audio out from under
+      // everyone mid-song is not a thing anyone asked for
+      view.querySelectorAll("[data-jam-mode]").forEach((b) => {
+        b.onclick = () => {
+          if (b.dataset.jamMode === mode) return;
+          setPref("jamMode", b.dataset.jamMode);
+          paint();
+        };
+      });
+
+      $("#jam-start-btn").onclick = async () => {
+        try {
+          const seed = state.current
+            ? {
+                queue: state.queue.slice(0, 500),
+                index: state.qIndex,
+                pos: audio.currentTime || 0,
+                playing: !audio.paused,
+              }
+            : {};
+          const snap = await api.jamCreate(seed, mode);
+          enterJam(snap, { quiet: true });
+          renderJamView();
+          toast(c.started);
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+
+      const joinByCode = async () => {
+        const typed = $("#jam-code-input").value.trim();
+        if (!typed) return;
+        try {
+          // the code decides which kind you are joining, not the toggle
+          const snap = await api.jamJoin(typed);
+          enterJam(snap);
+          renderJamView();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+      $("#jam-join-code-btn").onclick = joinByCode;
+      $("#jam-code-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") joinByCode();
+      });
     };
-    const joinByCode = async () => {
-      const typed = $("#jam-code-input").value.trim();
-      if (!typed) return;
-      try {
-        const snap = await api.jamJoin(typed);
-        enterJam(snap);
-        // a code can be for either kind — land on the matching route
-        if (snap.mode !== routeMode) location.hash = jamRoute(snap.mode);
-        else renderJamView("", routeMode);
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-    $("#jam-join-code-btn").onclick = joinByCode;
-    $("#jam-code-input").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") joinByCode();
-    });
+    paint();
     return;
   }
 
@@ -6076,6 +6093,7 @@ const PREF_DEFAULTS = {
   discoOpen: false,    // discography starts collapsed
   lyricsSize: 18,
   dj: false,
+  jamMode: "speaker", // which kind the Jam screen offers first
 };
 
 const prefs = (() => {
@@ -6307,7 +6325,7 @@ function mountShelfControls(root = view) {
 // Which top-level tab owns each route — the tabs stay lit while you drill into
 // an album or an artist, so you never lose track of where you are.
 const TAB_OWNER = {
-  home: "home", trending: "home", radio: "home", jam: "home",
+  home: "home", trending: "home", radio: "home", jam: "home", together: "home",
   search: "search", album: "search", artist: "search", ytplaylist: "search", shared: "search",
   discover: "discover",
   library: "library", liked: "library", saves: "library", playlist: "library", smart: "library",
@@ -6364,8 +6382,11 @@ function router() {
     case "radio": renderRadio(); break;
     // one view, two front doors: #/jam is the same-room feature, #/together
     // the remote one. Inside a session both show its dashboard.
-    case "jam": renderJamView(param, "speaker"); break;
-    case "together": renderJamView(param, "together"); break;
+    case "jam": renderJamView(param); break;
+    // links shared while the two had separate routes still work
+    case "together":
+      location.replace(param ? `#/jam/${param}` : "#/jam");
+      break;
     case "library": renderLibrary(); break;
     // Member management moved into Profile; keep the old route pointing there.
     case "admin": location.replace("#/profile"); break;
