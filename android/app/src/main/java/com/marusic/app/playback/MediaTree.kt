@@ -21,6 +21,7 @@ object MediaIds {
     const val HOME = "home"
     const val LIBRARY = "library"
     const val RADIO = "radio"
+    const val QUICKPICKS = "home/quickpicks"
     const val TRENDING = "home/trending"
     const val RELEASES = "home/releases"
     const val LIKED = "library/liked"
@@ -166,6 +167,7 @@ class MediaTree(private val container: AppContainer) {
      * album/playlist/mix/station siblings.
      */
     suspend fun songsForContainer(ctx: String): List<Song>? = when {
+        ctx == MediaIds.QUICKPICKS -> repo.quickPicks().songs
         ctx == MediaIds.TRENDING -> repo.trending().singles
         ctx == MediaIds.LIKED -> repo.library().liked
         ctx == MediaIds.HISTORY -> repo.library().history

@@ -1,5 +1,7 @@
 node_modules/
-data/
+# Anchored: the server's SQLite dir only. An unanchored "data/" also swallowed
+# android/app/src/main/java/com/marusic/app/data/, which broke the CI build.
+/data/
 .env
 .claude/settings.local.json
 *.sqlite

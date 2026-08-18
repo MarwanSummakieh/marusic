@@ -3,6 +3,7 @@
 package com.marusic.app.ui.screens
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
@@ -42,13 +46,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.marusic.app.R
 import com.marusic.app.appContainer
 import com.marusic.app.data.AlbumRef
+import com.marusic.app.data.Song
 import com.marusic.app.playback.MediaIds
+import com.marusic.app.ui.Artwork
 import com.marusic.app.ui.AvatarButton
 import com.marusic.app.ui.ContentCard
 import com.marusic.app.ui.Load
@@ -75,12 +82,14 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
     val library by container.repo.library.collectAsState()
     val settings by container.settings.flow.collectAsState(initial = null)
     var mixTick by remember { mutableIntStateOf(0) }
+    var quickTick by remember { mutableIntStateOf(0) }
     var trendTick by remember { mutableIntStateOf(0) }
     var radioTick by remember { mutableIntStateOf(0) }
     var customising by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { runCatching { container.repo.library() } }
     val mixesLoad = rememberLoad(mixTick) { container.repo.mixes() }
+    val quickLoad = rememberLoad(quickTick) { container.repo.quickPicks() }
     val trendingLoad = rememberLoad(trendTick) { container.repo.trending() }
     val radioLoad = rememberLoad(radioTick) { container.repo.radioStations() }
 
@@ -146,6 +155,51 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
                         ) { nav.navigate("library?tab=3") }
                     }
                 }
+            }
+        }
+
+        // ---- Quick picks ----
+        // The web's speed dial: single tracks stacked four deep, paging
+        // sideways. Not cards — none of these have an inside to open.
+        if (visible("quickpicks")) {
+            when (val q = quickLoad) {
+                is Load.Ok -> {
+                    val picks = q.value.songs
+                    if (picks.isNotEmpty()) {
+                        item {
+                            WebSectionTitle("Quick picks") {
+                                OutlinePill("Play all") { pc.play(picks, 0, MediaIds.QUICKPICKS) }
+                            }
+                        }
+                        item {
+                            Text(
+                                if (q.value.seeded) "Built from what you play most — one tap each."
+                                else "Trending right now. Play a few songs and these become yours.",
+                                fontSize = 13.sp,
+                                color = Web.sub,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                            )
+                        }
+                        item {
+                            LazyHorizontalGrid(
+                                rows = GridCells.Fixed(QUICK_PICK_ROWS),
+                                contentPadding = PaddingValues(horizontal = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(QUICK_PICK_ROW_HEIGHT * QUICK_PICK_ROWS),
+                            ) {
+                                itemsIndexed(picks) { i, song ->
+                                    QuickPickTile(song, pc.currentSong?.id == song.id) {
+                                        pc.play(picks, i, MediaIds.QUICKPICKS)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                is Load.Err -> item { RowError("Quick picks", q.message) { quickTick++ } }
+                is Load.Loading -> Unit
             }
         }
 
@@ -287,6 +341,7 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
                 )
                 listOf(
                     "shortcuts" to "Shortcuts",
+                    "quickpicks" to "Quick picks",
                     "mixes" to "Made for you",
                     "history" to "Jump back in",
                     "trending" to "Trending",
@@ -305,6 +360,41 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
                 }
                 Spacer(Modifier.height(24.dp))
             }
+        }
+    }
+}
+
+/** One quick-pick cell: art, title, artist. Four of these stack per column. */
+private val QUICK_PICK_ROWS = 4
+private val QUICK_PICK_ROW_HEIGHT = 64.dp
+
+@Composable
+private fun QuickPickTile(song: Song, isCurrent: Boolean, onPlay: () -> Unit) {
+    Row(
+        Modifier
+            .width(288.dp)
+            .height(QUICK_PICK_ROW_HEIGHT)
+            .clickable(onClick = onPlay)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Artwork(song.image, Modifier.size(48.dp))
+        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Text(
+                song.title,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (isCurrent) Web.accent else Web.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                song.artist.ifBlank { "Unknown Artist" },
+                fontSize = 12.sp,
+                color = Web.sub,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
