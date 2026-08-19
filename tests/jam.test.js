@@ -112,6 +112,30 @@ test("queue: extendQueue dedupes, removeSongAt guards current and fixes index", 
   assert.deepEqual(jam.queue.map((s) => s.id), ["b", "d"]);
 });
 
+test("queue: picks land ahead of the autoplay tail, never behind it", () => {
+  const jam = jams.createJam(user("H"), { queue: [song("a")], index: 0, playing: true });
+  assert.equal(jams.extendQueue(jam, [song("x1"), song("x2"), song("x3")]), 3);
+  assert.ok(jam.queue[1].auto && jam.queue[3].auto);
+  // a pick made while "a" plays goes right after it, before the suggestions
+  jams.addSongs(jam, [song("b")], "G");
+  assert.deepEqual(jam.queue.map((s) => s.id), ["a", "b", "x1", "x2", "x3"]);
+  // a second pick queues behind the first, still ahead of autoplay
+  jams.addSongs(jam, [song("c")], "G");
+  assert.deepEqual(jam.queue.map((s) => s.id), ["a", "b", "c", "x1", "x2", "x3"]);
+  // once we're into the suggestions, a pick plays next — never before current
+  jams.playAt(jam, 4);
+  jams.addSongs(jam, [song("d")], "G");
+  assert.deepEqual(jam.queue.map((s) => s.id), ["a", "b", "c", "x1", "x2", "d", "x3"]);
+  assert.equal(jam.index, 4);
+  // seeds keep the boundary from the local player
+  const seeded = jams.createJam(user("H2"), {
+    queue: [song("s"), song("t", { auto: true })], index: 0,
+  });
+  jams.addSongs(seeded, [song("u")]);
+  assert.deepEqual(seeded.queue.map((s) => s.id), ["s", "u", "t"]);
+  assert.equal(seeded.queue[0].auto, undefined);
+});
+
 test("transport: play/pause/seek/next/prev and server-clock position", () => {
   const jam = jams.createJam(user("H"), { queue: [song("a"), song("b")], index: 0 });
   jams.resumeJam(jam);
@@ -158,6 +182,18 @@ test("markEnded: first matching report advances, stragglers and paused no-op", (
   assert.equal(jam.playing, false);
   assert.equal(jam.pos, 0);
   assert.equal(jams.markEnded(jam, 1), false); // paused → ignore
+});
+
+test("markEnded: the last track doesn't stop the jam while a refill is in flight", () => {
+  const jam = jams.createJam(user("H"), { queue: [song("a")], index: 0, playing: true }, "", "together");
+  jam.extending = Promise.resolve(); // server marks an autoplay refill in progress
+  assert.equal(jams.markEnded(jam, 0), false);
+  assert.equal(jam.playing, true); // still "playing", nobody got parked at 0:00
+  assert.equal(jam.index, 0);
+  jam.extending = false;
+  jams.extendQueue(jam, [song("b")]);
+  assert.equal(jams.markEnded(jam, 0), true);
+  assert.equal(jam.index, 1);
 });
 
 test("permissions: guestsControl gates guests, never the host", () => {

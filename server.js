@@ -1127,18 +1127,28 @@ function requireJamHost(req, res, next) {
 // When the current track is the last one and jam-autoplay is on, top the
 // queue up with related songs (the same automix continuation the local
 // player's autoplay uses) before advancing, so the music never stops.
+//
+// In listen-together every device reports the end of the last track within a
+// few hundred ms of each other. The first report starts the refill; the rest
+// must *wait for it* rather than skip it — otherwise the second report sees
+// "no next track" and stops the session, and the refill lands on a paused
+// jam parked at 0:00 of the song that just finished (press play: it repeats).
+// `extending` holds the in-flight promise so every caller rides the same one.
 async function refillJamIfEnding(j) {
-  if (!j.settings.autoplay || j.extending) return;
+  if (!j.settings.autoplay) return;
+  if (j.extending) return j.extending;
   if (j.index < j.queue.length - 1) return;
   const last = j.queue[j.queue.length - 1];
   if (!last) return;
-  j.extending = true;
-  try {
-    const songs = await ytm.getUpNext(last.id).catch(() => []);
-    jam.extendQueue(j, songs);
-  } finally {
-    j.extending = false;
-  }
+  j.extending = (async () => {
+    try {
+      const songs = await ytm.getUpNext(last.id).catch(() => []);
+      jam.extendQueue(j, songs);
+    } finally {
+      j.extending = false;
+    }
+  })();
+  return j.extending;
 }
 
 app.post("/api/jam", requireAuth, (req, res) => {

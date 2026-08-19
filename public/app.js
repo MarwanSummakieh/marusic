@@ -331,7 +331,8 @@ async function playSongRadio(song) {
   } catch { /* the track is already playing; autoplay retries later */ }
   // Bail if the listener moved on to something else while that was in flight.
   if (!Array.isArray(related) || state.current?.id !== song.id || state.queue.length !== 1) return;
-  const fresh = related.filter((s) => s.id !== song.id && !hiddenTracks.has(s.id));
+  const fresh = related.filter((s) => s.id !== song.id && !hiddenTracks.has(s.id))
+    .map((s) => ({ ...s, auto: true }));
   if (!fresh.length) return;
   state.queue.push(...fresh);
   if (state.order) state.order.push(...fresh.map((_, k) => 1 + k));
@@ -431,7 +432,8 @@ async function fetchAutoplay() {
     const songs = await api.reco(state.current.id);
     const have = new Set(state.queue.map((s) => s.id));
     // Tracks the listener hid never come back through autoplay.
-    const fresh = songs.filter((s) => !have.has(s.id) && !hiddenTracks.has(s.id));
+    const fresh = songs.filter((s) => !have.has(s.id) && !hiddenTracks.has(s.id))
+      .map((s) => ({ ...s, auto: true }));
     if (fresh.length) {
       const start = state.queue.length;
       state.queue.push(...fresh);
@@ -809,7 +811,7 @@ $("#btn-play").addEventListener("click", () => {
     // our audio got blocked while the session plays → this tap is the user
     // gesture that lets us catch back up, not a pause for everyone
     if (jamPlaysAudio() && state.jam.playing && audio.paused)
-      return jamApplyPlayback({ force: false });
+      return jamApplyPlayback({ sync: true });
     return jamControl(state.jam.playing ? api.jamPause : api.jamPlay);
   }
   if (!state.current) return;
@@ -1463,10 +1465,19 @@ function renderQueuePanel() {
     html += `<div class="queue-section">Now playing</div>${item(state.qIndex, true)}`;
   }
   const up = upcomingIndices();
-  if (up.length) {
-    html += `<div class="queue-section">Next ${state.radio ? `· ${esc(state.radio.name)} Radio` : "up"}
+  const { picks, autos } = state.radio
+    ? { picks: up, autos: [] }
+    : splitAutoTail(up, (i) => state.queue[i].auto);
+  if (picks.length) {
+    html += `<div class="queue-section">${
+      state.radio ? `Next · ${esc(state.radio.name)} Radio` : autos.length ? "Next in queue" : "Next up"}
       <button class="queue-clear" id="queue-clear-up">Clear</button></div>`;
-    html += up.map((i) => item(i, false)).join("");
+    html += picks.map((i) => item(i, false)).join("");
+  }
+  if (autos.length) {
+    html += `<div class="queue-section">Next up · Autoplay${
+      picks.length ? "" : `<button class="queue-clear" id="queue-clear-up">Clear</button>`}</div>`;
+    html += autos.map((i) => item(i, false)).join("");
   }
   list.innerHTML = html;
   const clear = $("#queue-clear-up");
@@ -1599,11 +1610,27 @@ function renderJamQueue(list) {
   if (j.index >= 0 && j.queue[j.index]) {
     html += `<div class="queue-section">Now playing</div>${item(j.index, true)}`;
   }
+  // what people queued comes first, then what autoplay filled in — shown as
+  // two sections so it's obvious a new pick jumps ahead of the suggestions
   const up = [...j.queue.keys()].slice(j.index + 1);
-  if (up.length) {
-    html += `<div class="queue-section">Next up</div>` + up.map((i) => item(i, false)).join("");
+  const { picks, autos } = splitAutoTail(up, (i) => j.queue[i].auto);
+  if (picks.length) {
+    html += `<div class="queue-section">${autos.length ? "Next in queue" : "Next up"}</div>` +
+      picks.map((i) => item(i, false)).join("");
+  }
+  if (autos.length) {
+    html += `<div class="queue-section">Next up · Autoplay</div>` + autos.map((i) => item(i, false)).join("");
   }
   list.innerHTML = html;
+}
+
+// Split upcoming indices into "picks" and the autoplay tail — but only when
+// the tail really is a tail (every auto song after the first one). If someone
+// backed up into the picks, the two interleave and one flat list is honest.
+function splitAutoTail(up, isAuto) {
+  const k = up.findIndex(isAuto);
+  if (k === -1 || !up.slice(k).every(isAuto)) return { picks: up, autos: [] };
+  return { picks: up.slice(0, k), autos: up.slice(k) };
 }
 
 $("#queue-list").addEventListener("click", (e) => {
@@ -1805,32 +1832,96 @@ const JAM_DRIFT_SEEK = 1.0; // past this, a nudge would take too long — seek
 const JAM_DRIFT_NUDGE = 0.15; // inside this we're in sync; run at exactly 1×
 const JAM_RATE_MAX = 0.03; // ±3%, comfortably below the audible-pitch floor
 const JAM_DRIFT_TOLERANCE = 2.5; // jam mode: nobody is listening in parallel
+const JAM_SEEK_HOLDOFF = 5000; // ms between hard seeks — let one land first
+const JAM_LEAD_MAX = 2.0; // cap on the seek lead we'll compensate for
+
+/* A hard seek is not free: the proxy has to open a fresh ranged request
+   upstream, so playback resumes some hundreds of ms (on a phone, seconds)
+   after we ask — and by then we're behind again. Naively re-seeking every
+   check turns that into a stutter loop: seek, stall, fall behind, seek…
+   Three defences: (1) never hard-seek while the element is stalled or
+   starving — it can't help, and the rate nudge is paused anyway; (2) after a
+   hard seek, hold off further ones so it can settle; (3) aim past the target
+   by the lead we measured last time (issue → `playing`), so we land on the
+   beat instead of a step behind it. */
+let jamSeekAt = 0; // when the last hard seek was issued
+let jamSeekLead = 0; // seconds a hard seek has been costing us lately (EMA)
+let jamStalledAt = 0; // last `waiting`/`stalled` — buffer ran dry
+let jamPlayingAt = 0; // last `playing` — buffer refilled / play resumed
+let jamSyncPending = false; // a loadedmetadata sync is already queued
+
+audio.addEventListener("error", () => { jamSyncPending = false; }); // no metadata coming
+audio.addEventListener("waiting", () => { jamStalledAt = Date.now(); });
+audio.addEventListener("stalled", () => { jamStalledAt = Date.now(); });
+audio.addEventListener("playing", () => {
+  jamPlayingAt = Date.now();
+  if (jamSeekAt && jamPlayingAt - jamSeekAt < 10_000) {
+    // how long the last hard seek took to start sounding
+    const took = Math.min(JAM_LEAD_MAX, (jamPlayingAt - jamSeekAt) / 1000);
+    jamSeekLead = jamSeekLead ? jamSeekLead * 0.6 + took * 0.4 : took;
+  }
+});
+
+// starved: buffering now, or hasn't recovered since the last stall
+const jamStarved = () =>
+  audio.readyState < 3 || (jamStalledAt > jamPlayingAt && Date.now() - jamStalledAt < 8000);
 
 function jamSetRate(rate) {
   if (Math.abs(audio.playbackRate - rate) > 0.0005) audio.playbackRate = rate;
 }
 
+function jamHardSeek(target) {
+  jamSeekAt = Date.now();
+  audio.currentTime = target;
+}
+
 function jamSyncPosition() {
-  const apply = () => {
+  // `initial` = the track just loaded and hasn't sounded yet: place the head
+  // outright (nothing to stutter), no hold-off, no starved gate.
+  const apply = (initial = false) => {
+    if (!inJam()) return;
     const target = jamTargetPos();
     const drift = (audio.currentTime || 0) - target; // >0 = we're ahead
     if (!isTogether()) {
       // past the end (everyone lagged): the seek clamps, `ended` fires, and
       // the ended report advances the session — exactly what we want
-      if (Math.abs(drift) > JAM_DRIFT_TOLERANCE) audio.currentTime = target;
+      if (Math.abs(drift) > JAM_DRIFT_TOLERANCE) jamHardSeek(target);
       return;
     }
-    if (Math.abs(drift) > JAM_DRIFT_SEEK || !state.jam.playing || audio.paused) {
+    if (!state.jam.playing || audio.paused) {
       jamSetRate(1);
-      if (Math.abs(drift) > JAM_DRIFT_SEEK) audio.currentTime = target;
+      // paused: line up exactly, so resume starts everyone together
+      if (Math.abs(drift) > JAM_DRIFT_NUDGE) jamHardSeek(target);
       return;
     }
+    if (initial) {
+      jamSetRate(1);
+      // the stream takes a moment to start; aim ahead by what that has been
+      // costing so the first note lands with everyone else's
+      if (target + jamSeekLead > JAM_DRIFT_NUDGE) jamHardSeek(target + jamSeekLead);
+      return;
+    }
+    if (Math.abs(drift) > JAM_DRIFT_SEEK) {
+      jamSetRate(1);
+      if (jamStarved()) return; // buffering — a seek only stalls it again
+      if (Date.now() - jamSeekAt < JAM_SEEK_HOLDOFF) return; // let the last one land
+      // behind: lead the target by what a seek costs, so we arrive on time
+      // rather than a step late. Ahead: never lead (that's a rewind).
+      jamHardSeek(target + (drift < 0 ? jamSeekLead : 0));
+      return;
+    }
+    if (jamStarved()) return jamSetRate(1); // don't steer an empty buffer
     if (Math.abs(drift) <= JAM_DRIFT_NUDGE) return jamSetRate(1);
     // steer toward the target: ahead → slow down, behind → speed up
     jamSetRate(1 - Math.max(-JAM_RATE_MAX, Math.min(JAM_RATE_MAX, drift / 4)));
   };
-  if (audio.readyState >= 1) apply();
-  else audio.addEventListener("loadedmetadata", apply, { once: true });
+  if (audio.readyState >= 1) return apply(false);
+  if (jamSyncPending) return; // one listener is enough — it reads live state
+  jamSyncPending = true;
+  audio.addEventListener("loadedmetadata", () => {
+    jamSyncPending = false;
+    apply(true);
+  }, { once: true });
 }
 
 function jamApplyPlayback(opts = {}) {
@@ -1847,7 +1938,8 @@ function jamApplyPlayback(opts = {}) {
     return;
   }
   const key = `${j.index}:${song.id}`;
-  if (key !== jamLoadedKey || opts.force) {
+  const changed = key !== jamLoadedKey || opts.force;
+  if (changed) {
     jamLoadedKey = key;
     state.current = song;
     updateNowPlaying();
@@ -1876,7 +1968,10 @@ function jamApplyPlayback(opts = {}) {
   // the speaker role after tracks moved on still loads the right stream
   const want = streamSrc(song);
   if (!audio.src || !audio.src.endsWith(want)) audio.src = want;
-  jamSyncPosition();
+  // Only re-check the position when the transport actually moved (a sync, a
+  // new track, a role change). A queue edit — someone adding a song — used to
+  // run this too, and a mid-song hard seek was the audible result.
+  if (changed || opts.sync) jamSyncPosition();
   if (j.playing) {
     audio.play().then(hideJamResume).catch(showJamResume);
   } else {
@@ -1949,7 +2044,7 @@ function hideJamResume() {
 }
 $("#jam-resume").addEventListener("click", () => {
   hideJamResume();
-  jamApplyPlayback(); // runs inside the tap gesture, so play() is allowed
+  jamApplyPlayback({ sync: true }); // runs inside the tap gesture, so play() is allowed
 });
 
 function enterJam(snap, opts = {}) {
@@ -2037,7 +2132,7 @@ function jamOpenEvents() {
   es.addEventListener("hello", (e) => {
     if (!inJam()) return;
     jamApplyState(parse(e));
-    jamApplyPlayback();
+    jamApplyPlayback({ sync: true });
     applyAutoplayUI();
     renderJamChip();
     renderQueuePanel();
@@ -2051,7 +2146,7 @@ function jamOpenEvents() {
       index: s.index, playing: s.playing, pos: s.pos, at: s.at,
     });
     jamAdoptOffset(s.now);
-    jamApplyPlayback();
+    jamApplyPlayback({ sync: true });
     renderQueuePanel();
     if (onJamRoute()) renderJamView();
   });
@@ -3429,7 +3524,9 @@ view.addEventListener("click", async (e) => {
     searchInput.value = chip.dataset.q;
     state.searchQ = chip.dataset.q;
     clearTimeout(searchTimer);
-    renderSearch();
+    // a Browse tile is a search — results live on the search route
+    if (currentRoute !== "search") location.hash = "#/search";
+    else renderSearch();
     fetchSuggestions();
     return;
   }
@@ -4024,18 +4121,23 @@ const searchSection = (title, body, seeAll) =>
     ${body}
   </div>` : "";
 
+/* The moods & genres catalogue. On desktop it's the Browse tab (the search
+   field lives in the header, so a "Search" tab would just be a second way to
+   reach the same box); on phones it's what the Search tab shows under the
+   field until you type. Either way a tile is a search. */
+function renderBrowse() {
+  view.innerHTML = `
+    <div id="search-suggest"></div>
+    <h1 class="page-title">Browse everything</h1>
+    ${browseSectionsHTML()}`;
+  viewCtx = { songs: [], playlistId: null };
+  setTabTitle(currentRoute === "browse" ? "Browse" : "Search");
+  paintSuggestions();
+}
+
 function renderSearch() {
   const q = state.searchQ.trim();
-  if (!q) {
-    view.innerHTML = `
-      <div id="search-suggest"></div>
-      <h1 class="page-title">Browse everything</h1>
-      ${browseSectionsHTML()}`;
-    viewCtx = { songs: [], playlistId: null };
-    setTabTitle("Search");
-    paintSuggestions();
-    return;
-  }
+  if (!q) return renderBrowse();
 
   // A repeat of the query we already hold (a chip click) repaints from memory.
   if (searchData && searchDataQ === q) return paintSearch(q);
@@ -4200,7 +4302,7 @@ function placeSearchBar() {
   } else if (!onPhone && bar.parentElement !== $(".topbar")) {
     $(".topbar").insertBefore(bar, $("#jam-chip"));
   }
-  phoneSearchSlot.classList.toggle("hidden", !onPhone || currentRoute !== "search");
+  phoneSearchSlot.classList.toggle("hidden", !onPhone || !/^(search|browse)$/.test(currentRoute));
 }
 
 // Rotating the phone or resizing the window has to hand the field back: a
@@ -6123,7 +6225,7 @@ let suppressTabSync = false;
 const routeLabel = (hash) => {
   const route = hash.slice(2).split("/")[0] || "home";
   return ({
-    home: "Home", search: "Search", discover: "Discover", library: "Library",
+    home: "Home", search: "Search", browse: "Browse", discover: "Discover", library: "Library",
     profile: "Profile", liked: "Liked Songs", saves: "Saves", radio: "Radio",
     jam: "Jam", trending: "Trending", admin: "Members",
   })[route] || route.charAt(0).toUpperCase() + route.slice(1);
@@ -6326,7 +6428,7 @@ function mountShelfControls(root = view) {
 // an album or an artist, so you never lose track of where you are.
 const TAB_OWNER = {
   home: "home", trending: "home", radio: "home", jam: "home", together: "home",
-  search: "search", album: "search", artist: "search", ytplaylist: "search", shared: "search",
+  search: "search", browse: "search", album: "search", artist: "search", ytplaylist: "search", shared: "search",
   discover: "discover",
   library: "library", liked: "library", saves: "library", playlist: "library", smart: "library",
   profile: "profile", admin: "profile",
@@ -6367,7 +6469,10 @@ function router() {
     case "search":
       searchInput.value = state.searchQ;
       renderSearch();
+      // "go search" with nothing typed yet: put the cursor in the field
+      if (!state.searchQ.trim() && !isPhone()) searchInput.focus();
       break;
+    case "browse": renderBrowse(); break;
     case "discover": renderDiscover(); break;
     case "profile": renderProfile(param); break;
     case "album": renderAlbum(decodeURIComponent(param)); break;
