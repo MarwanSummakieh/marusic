@@ -2,11 +2,11 @@
 // opens instantly. Network-first (so deploys land on next load) with a cache
 // fallback for offline. The API — including the audio proxy — is never
 // touched: Range streaming and auth must always hit the server.
-const CACHE = "marusic-shell-v19";
+const CACHE = "marusic-shell-v20";
 const SHELL = [
   "/",
-  "/styles.css?v=25",
-  "/app.js?v=25",
+  "/styles.css?v=27",
+  "/app.js?v=27",
   "/auth.js",
   "/login.html",
   "/invite.html",

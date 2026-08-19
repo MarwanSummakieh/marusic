@@ -4121,10 +4121,10 @@ const searchSection = (title, body, seeAll) =>
     ${body}
   </div>` : "";
 
-/* The moods & genres catalogue. On desktop it's the Browse tab (the search
-   field lives in the header, so a "Search" tab would just be a second way to
-   reach the same box); on phones it's what the Search tab shows under the
-   field until you type. Either way a tile is a search. */
+/* The moods & genres catalogue — the Browse tab on every screen size. The
+   search field is the only search: in the header on desktop, behind the
+   header's search icon on phones (where the empty Search page also shows this
+   grid under the field). Either way a tile is a search. */
 function renderBrowse() {
   view.innerHTML = `
     <div id="search-suggest"></div>
@@ -4287,10 +4287,10 @@ searchInput.addEventListener("input", () => {
 
 /* ---- where the search field lives ----
    One input, two homes. On desktop it sits in the header, ready on every
-   route. On phones the header has no room for it and the bottom bar already
-   has a Search tab, so the very same element is moved down into the page and
-   shown only on that tab — moved rather than duplicated, so every handler
-   bound to #search-input keeps working and the two can't drift apart. */
+   route. On phones the header has no room for it, so the very same element is
+   moved down into the Search page (reached from the header's search icon) —
+   moved rather than duplicated, so every handler bound to #search-input keeps
+   working and the two can't drift apart. */
 const phoneSearchSlot = $("#phone-search");
 
 function placeSearchBar() {
@@ -4302,7 +4302,7 @@ function placeSearchBar() {
   } else if (!onPhone && bar.parentElement !== $(".topbar")) {
     $(".topbar").insertBefore(bar, $("#jam-chip"));
   }
-  phoneSearchSlot.classList.toggle("hidden", !onPhone || !/^(search|browse)$/.test(currentRoute));
+  phoneSearchSlot.classList.toggle("hidden", !onPhone || currentRoute !== "search");
 }
 
 // Rotating the phone or resizing the window has to hand the field back: a
@@ -4322,6 +4322,14 @@ $("#search-clear").addEventListener("click", () => {
   searchSuggestions = [];
   if (currentRoute === "search") renderSearch();
   searchInput.focus();
+});
+
+// Phones: the header's search icon opens the Search page with the keyboard up.
+let phoneSearchTap = false;
+$("#phone-search-btn").addEventListener("click", () => {
+  phoneSearchTap = true;
+  if (currentRoute === "search") { searchInput.focus(); phoneSearchTap = false; }
+  else location.hash = "#/search";
 });
 
 // ⌘/Ctrl-K and "/" jump to the search field from anywhere.
@@ -6444,8 +6452,9 @@ function markActiveNav() {
     a.classList.toggle("active", route === "playlist" && location.hash.includes(a.dataset.plid))
   );
   document.querySelectorAll("[data-mnav]").forEach((a) =>
-    a.classList.toggle("active", a.dataset.mnav === owner)
+    a.classList.toggle("active", a.dataset.mnav === owner && route !== "search")
   );
+  $("#phone-search-btn").classList.toggle("active", route === "search");
 }
 
 function router() {
@@ -6469,8 +6478,10 @@ function router() {
     case "search":
       searchInput.value = state.searchQ;
       renderSearch();
-      // "go search" with nothing typed yet: put the cursor in the field
-      if (!state.searchQ.trim() && !isPhone()) searchInput.focus();
+      // "go search" with nothing typed yet: put the cursor in the field (on a
+      // phone only when the search icon was tapped — not on every back-swipe)
+      if (!state.searchQ.trim() && (!isPhone() || phoneSearchTap)) searchInput.focus();
+      phoneSearchTap = false;
       break;
     case "browse": renderBrowse(); break;
     case "discover": renderDiscover(); break;

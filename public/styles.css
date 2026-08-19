@@ -834,6 +834,7 @@ img { -webkit-user-drag: none; user-select: none; }
 .icon-btn:hover { color: var(--text); }
 .icon-btn svg { width: 17px; height: 17px; }
 .icon-btn.on { color: var(--accent); }
+.phone-search-btn { display: none; } /* phones only — see the ≤640px block */
 
 /* ---------------- player ---------------- */
 .player {
@@ -1423,7 +1424,10 @@ img { -webkit-user-drag: none; user-select: none; }
   .nav-arrows { display: none; }
   .topbar { padding: 12px 14px; gap: 10px; }
   .user-name { display: none; }
-  .user-chip { padding: 4px; margin-left: auto; }
+  .phone-search-btn { display: inline-flex; margin-left: auto; padding: 6px; }
+  .phone-search-btn svg { width: 22px; height: 22px; }
+  .phone-search-btn.active { color: var(--accent); }
+  .user-chip { padding: 4px; }
 
   /* content spacing */
   .view { padding: 4px 12px 28px; }

@@ -8,7 +8,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#121212">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <link rel="stylesheet" href="/styles.css?v=26">
+  <link rel="stylesheet" href="/styles.css?v=27">
 </head>
 <body>
   <div class="app">
@@ -80,6 +80,8 @@
           <input id="search-input" placeholder="What do you want to listen to?" autocomplete="off" spellcheck="false">
           <button id="search-clear" class="icon-btn hidden" title="Clear" data-icon="close"></button>
         </div>
+        <!-- phones: the field lives on the Search page; this is the one way in -->
+        <button id="phone-search-btn" class="icon-btn phone-search-btn" title="Search" data-icon="search"></button>
         <a id="jam-chip" class="jam-chip hidden" href="#/jam" title="Open the jam"></a>
         <button id="user-chip" class="user-chip hidden" title="Account"></button>
       </header>
@@ -253,7 +255,7 @@
 
     <nav class="mobile-nav" id="mobile-nav">
       <a href="#/home" data-mnav="home"><span class="mnav-icon" data-icon="home"></span><span class="mnav-label">Home</span></a>
-      <a href="#/search" data-mnav="search"><span class="mnav-icon" data-icon="search"></span><span class="mnav-label">Search</span></a>
+      <a href="#/browse" data-mnav="search"><span class="mnav-icon" data-icon="grid"></span><span class="mnav-label">Browse</span></a>
       <a href="#/discover" data-mnav="discover"><span class="mnav-icon" data-icon="sparkle"></span><span class="mnav-label">Discover</span></a>
       <a href="#/library" data-mnav="library"><span class="mnav-icon" data-icon="library"></span><span class="mnav-label">Library</span></a>
       <a href="#/profile" data-mnav="profile"><span class="mnav-icon" data-icon="person"></span><span class="mnav-label">Profile</span></a>
@@ -309,7 +311,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=26"></script>
+  <script src="/app.js?v=27"></script>
   <!-- Google Cast sender SDK — after app.js so __onGCastApiAvailable exists.
        Loading it in a non-Cast browser (or offline) is a harmless no-op. -->
   <script src="https://www.gstatic.com/cast/sdk/libs/sender/v1/cast_sender.js?loadCastFramework=1"></script>
