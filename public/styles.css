@@ -1306,31 +1306,7 @@ img { -webkit-user-drag: none; user-select: none; }
 }
 
 /* ---------------- admin ---------------- */
-.admin-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--raised);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.admin-table th {
-  text-align: left;
-  color: var(--sub);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(var(--ink), .10);
-}
-
-.admin-table td { padding: 12px 16px; border-bottom: 1px solid rgba(var(--ink), .05); vertical-align: middle; }
-.admin-table tr:last-child td { border-bottom: none; }
-.admin-table td .user-avatar { margin-right: 8px; vertical-align: middle; }
-
 .admin-sub { color: var(--sub); font-size: 13px; }
-.admin-actions { text-align: right; white-space: nowrap; }
-.admin-actions .btn-ghost { padding: 6px 10px; font-size: 13px; }
 .danger-text:hover { color: #f15e6c !important; }
 
 .badge {
@@ -1344,7 +1320,6 @@ img { -webkit-user-drag: none; user-select: none; }
 }
 
 .badge-green { background: #1db95426; color: var(--accent-hover); }
-.badge-red { background: #e9142926; color: #f15e6c; }
 
 .section h2 .btn-solid { font-size: 13px; padding: 8px 18px; }
 
@@ -2564,7 +2539,6 @@ body { -webkit-tap-highlight-color: transparent; }
 .ch-art-smart { background: linear-gradient(135deg, #7d3fbe, #3b1f66); }
 .ch-art-smart svg { width: 76px; height: 76px; }
 
-.save-btn.on { color: var(--accent); }
 .act-save.on { color: var(--accent); opacity: 1; }
 
 .collection-desc { color: var(--sub); max-width: 70ch; margin: 8px 0 4px; line-height: 1.6; }
@@ -2626,6 +2600,7 @@ body { -webkit-tap-highlight-color: transparent; }
    Discography
    ========================================================================== */
 .disco-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.disco-tools { display: flex; align-items: center; gap: 14px; }
 .disco-toggle { display: inline-flex; align-items: center; gap: 10px; font: inherit; font-weight: 700; }
 .disco-caret { display: flex; transition: transform .18s; color: var(--sub); }
 .disco-caret svg { width: 15px; height: 15px; }
@@ -2676,9 +2651,6 @@ body { -webkit-tap-highlight-color: transparent; }
   padding: 6px 18px;
   margin-top: 10px;
 }
-.pc-row { display: flex; justify-content: space-between; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--border); }
-.pc-row:last-of-type { border-bottom: none; }
-.pc-row span { color: var(--sub); }
 .pc-note { color: var(--sub); font-size: 13px; line-height: 1.6; padding: 12px 0; }
 .pc-note a { color: var(--accent); font-weight: 700; }
 

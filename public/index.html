@@ -8,7 +8,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#121212">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <link rel="stylesheet" href="/styles.css?v=27">
+  <link rel="stylesheet" href="/styles.css?v=28">
 </head>
 <body>
   <div class="app">
@@ -64,7 +64,7 @@
         </div>
 
         <!-- top-level tabs: the only way to move between sections on desktop -->
-        <nav class="top-tabs" id="top-tabs">
+        <nav class="top-tabs">
           <a href="#/home" data-nav="home" title="Home"><span class="tt-icon" data-icon="home"></span><span class="tt-label">Home</span></a>
           <!-- Searching happens in the field beside these tabs; this tab is the
                moods & genres catalogue that used to sit under an empty search -->
@@ -197,7 +197,7 @@
 
     <footer class="player is-idle">
       <div class="player-left">
-        <div id="np-idle" class="np-idle">
+        <div class="np-idle">
           <span class="np-idle-icon" data-icon="note"></span>
           <span>Not playing</span>
         </div>
@@ -253,9 +253,9 @@
       </div>
     </footer>
 
-    <nav class="mobile-nav" id="mobile-nav">
+    <nav class="mobile-nav">
       <a href="#/home" data-mnav="home"><span class="mnav-icon" data-icon="home"></span><span class="mnav-label">Home</span></a>
-      <a href="#/browse" data-mnav="search"><span class="mnav-icon" data-icon="grid"></span><span class="mnav-label">Browse</span></a>
+      <a href="#/browse" data-mnav="browse"><span class="mnav-icon" data-icon="grid"></span><span class="mnav-label">Browse</span></a>
       <a href="#/discover" data-mnav="discover"><span class="mnav-icon" data-icon="sparkle"></span><span class="mnav-label">Discover</span></a>
       <a href="#/library" data-mnav="library"><span class="mnav-icon" data-icon="library"></span><span class="mnav-label">Library</span></a>
       <a href="#/profile" data-mnav="profile"><span class="mnav-icon" data-icon="person"></span><span class="mnav-label">Profile</span></a>
@@ -271,7 +271,7 @@
       <input id="modal-input" placeholder="Playlist name" autocomplete="off" maxlength="60">
       <div class="modal-actions">
         <button type="button" id="modal-cancel" class="btn-ghost">Cancel</button>
-        <button type="submit" id="modal-save" class="btn-solid">Save</button>
+        <button type="submit" class="btn-solid">Save</button>
       </div>
     </form>
   </dialog>
@@ -311,7 +311,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=27"></script>
+  <script src="/app.js?v=28"></script>
   <!-- Google Cast sender SDK — after app.js so __onGCastApiAvailable exists.
        Loading it in a non-Cast browser (or offline) is a harmless no-op. -->
   <script src="https://www.gstatic.com/cast/sdk/libs/sender/v1/cast_sender.js?loadCastFramework=1"></script>

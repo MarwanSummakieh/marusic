@@ -73,6 +73,12 @@ const esc = (s = "") =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
   );
 
+// The same song often exists under several videoIds (album cut, video, remaster
+// upload). Where a surface would show or queue it twice, this is the key two
+// copies share. A guess by design — use it to collapse duplicates, never to
+// decide identity for storage.
+const songKey = (s) => `${(s.title || "").toLowerCase().trim()}|${(s.artist || "").toLowerCase().trim()}`;
+
 const fmtTime = (sec) => {
   sec = Math.max(0, Math.round(Number(sec) || 0));
   const m = Math.floor(sec / 60);
@@ -215,7 +221,6 @@ const state = {
   pos: 0,
   repeat: "off", // off | all | one
   radio: null, // { name, next }
-  insertAt: 0, // "add to queue" insertion pointer
   quality: ["low", "medium", "high"].includes(localStorage.getItem("quality"))
     ? localStorage.getItem("quality")
     : "high",
@@ -280,7 +285,6 @@ function restorePlayerState() {
   state.pos = st.opos || 0;
   state.repeat = st.repeat === "all" || st.repeat === "one" ? st.repeat : "off";
   state.radio = st.radio || null;
-  state.insertAt = st.qIndex + 1;
   // don't hit the stream proxy (a yt-dlp resolve) until the user presses play
   audio.preload = "none";
   audio.src = streamSrc(state.current);
@@ -310,7 +314,6 @@ function playQueue(songs, index = 0, opts = {}) {
   if (inJam()) return jamAddSongs([songs[index]]);
   state.queue = songs.slice();
   state.radio = opts.radio || null;
-  state.insertAt = 0;
   if (state.shuffle && !state.radio) buildShuffleOrder(index);
   else { state.order = null; }
   loadTrack(index, true);
@@ -356,7 +359,8 @@ function markTrackCurrent(i, song) {
   state.qIndex = i;
   state.current = song;
   state.resumeAt = 0;
-  state.insertAt = Math.max(state.insertAt, i + 1);
+  // it is playing now, not waiting in the queue
+  if (song.queued) song.queued = false;
   if (state.order) state.pos = state.order.indexOf(i);
   updateNowPlaying();
   renderQueuePanel();
@@ -481,6 +485,21 @@ async function fetchMoreRadio() {
   }
 }
 
+/* ---- "add to queue" ----
+   Songs added by hand play next, ahead of whatever context is running, and
+   several of them keep the order they were added in. That used to ride on a
+   pointer into the array (`insertAt`), which meant every skip, drag and
+   removal moved the array out from under it and picks started landing in
+   arbitrary places. The songs carry the mark instead: `queued` is a property
+   of the song, so it survives anything the queue does around it, and the
+   insertion point is simply derived — after the current track, past the picks
+   already waiting there. It's the same rule the jam queue uses server-side. */
+function nextQueueSlot() {
+  let i = state.qIndex + 1;
+  while (i < state.queue.length && state.queue[i].queued) i++;
+  return i;
+}
+
 function addToQueue(song) {
   if (inJam()) return jamAddSongs([song]);
   if (!state.queue.length || state.qIndex === -1) {
@@ -488,17 +507,69 @@ function addToQueue(song) {
     toast(`Playing "${song.title}"`);
     return;
   }
-  const at = Math.min(state.insertAt, state.queue.length);
-  state.queue.splice(at, 0, song);
+  const at = nextQueueSlot();
+  // in shuffle the list you see is the shuffled order, so that's where it goes
+  const slot = state.order ? orderSlotFor() : -1;
+  state.queue.splice(at, 0, { ...song, queued: true });
   if (state.order) {
-    // shift shuffled indices >= insertion point, keep queued song next in order
     state.order = state.order.map((i) => (i >= at ? i + 1 : i));
-    state.order.splice(state.pos + 1 + (state.insertAt - state.qIndex - 1), 0, at);
+    state.order.splice(slot, 0, at);
   }
-  state.insertAt++;
   renderQueuePanel();
   savePlayerState(true);
   toast(`Added to queue: ${song.title}`);
+}
+
+// the same "after the picks already waiting" spot, in shuffled play order
+function orderSlotFor() {
+  let p = state.pos + 1;
+  while (p < state.order.length && state.queue[state.order[p]]?.queued) p++;
+  return p;
+}
+
+/* ---- editing the queue ----
+   Everything that removes or moves songs goes through these two, so the play
+   cursor and the shuffle order can't fall out of step with the array. They
+   used to be fixed up by hand at each call site: the cursor was recovered by
+   searching for the playing song's id (which finds the wrong copy the moment
+   a song appears twice, and a radio queue is full of repeats), and the
+   shuffle order was thrown away and rebuilt — so removing one song silently
+   re-randomized everything you hadn't heard yet. */
+function dropQueueIndices(drop) {
+  if (!drop.size || drop.has(state.qIndex)) return false;
+  const keep = [...state.queue.keys()].filter((i) => !drop.has(i));
+  const moved = new Map(keep.map((old, now) => [old, now]));
+  state.queue = keep.map((i) => state.queue[i]);
+  state.qIndex = moved.get(state.qIndex);
+  if (state.order) {
+    state.order = state.order.filter((i) => moved.has(i)).map((i) => moved.get(i));
+    state.pos = Math.max(0, state.order.indexOf(state.qIndex));
+  }
+  return true;
+}
+
+// Move a song to where another one sits. Under shuffle the list you're
+// dragging in *is* the shuffled order, so that's what gets rearranged —
+// reordering the underlying array would move rows you can't even see.
+function moveInQueue(from, to) {
+  // a row from a list that has since been redrawn can name an index that no
+  // longer exists; moving nothing must not shuffle the cursor along
+  const ok = (i) => Number.isInteger(i) && i >= 0 && i < state.queue.length;
+  if (from === to || !ok(from) || !ok(to)) return;
+  if (state.order) {
+    const a = state.order.indexOf(from);
+    const b = state.order.indexOf(to);
+    if (a < 0 || b < 0) return;
+    state.order.splice(b, 0, ...state.order.splice(a, 1));
+    state.pos = state.order.indexOf(state.qIndex);
+    return;
+  }
+  state.queue.splice(to, 0, ...state.queue.splice(from, 1));
+  if (state.qIndex === from) state.qIndex = to;
+  else {
+    if (from < state.qIndex) state.qIndex--;
+    if (to <= state.qIndex) state.qIndex++;
+  }
 }
 
 /* audio events */
@@ -516,9 +587,11 @@ function handleTrackEnded() {
 
 audio.addEventListener("ended", () => {
   if (inJam()) {
-    // a device that finished the track advances the session for everyone —
-    // in listen together all of them report and the server takes the first
-    if (jamPlaysAudio()) api.jamEnded(state.jam.index).catch(() => {});
+    // The server schedules the boundary, so our stream running out is only
+    // news when it happens where no boundary was scheduled (a track with no
+    // duration metadata) or right as one is due. Ending early just means this
+    // copy was short — stay quiet and wait for the session to move.
+    if (jamPlaysAudio() && jamAtBoundary()) api.jamEnded(state.jam.index).catch(() => {});
     return;
   }
   handleTrackEnded();
@@ -547,7 +620,6 @@ audio.addEventListener("timeupdate", () => {
   savePlayerState();
   syncLyricsPop();
   applyEdgeTrims();
-  if (inJam()) jamDriftCheck();
   if (audio.currentTime > 5) prefetchNext();
 });
 
@@ -1075,15 +1147,22 @@ function closeDrawer() {
 async function paintDrawer() {
   const body = $("#np2-drawer-body");
   if (drawerMode === "queue") {
-    const up = upcomingIndices();
-    body.innerHTML = up.length
-      ? up.map((i) => {
-          const s = state.queue[i];
-          return `<div class="dq-item" data-dq="${i}">
-            ${artImg(s.image, "dq-art")}
-            <span class="dq-meta"><b>${esc(s.title)}</b><span>${esc(s.artist)}</span></span>
-          </div>`;
-        }).join("")
+    // the same queue the side panel draws, sections and all — on a phone this
+    // *is* the queue, and in a session it has to be the shared one
+    const v = queueView();
+    const row = (i) => {
+      const s = v.songs[i];
+      return `<div class="dq-item" data-dq="${i}">
+        ${artImg(s.image, "dq-art")}
+        <span class="dq-meta"><b>${esc(s.title)}</b><span>${esc(s.artist)}</span></span>
+      </div>`;
+    };
+    const block = (title, list) =>
+      list.length ? `<div class="queue-section">${title}</div>${list.map(row).join("")}` : "";
+    body.innerHTML = v.up.length
+      ? block("Next in queue", v.queued) +
+        block(v.autos.length && !v.queued.length ? "Next in queue" : v.nextTitle, v.next) +
+        block("Next up · Autoplay", v.autos)
       : `<div class="queue-empty">Nothing queued after this.</div>`;
   } else if (drawerMode === "lyrics") {
     const song = state.current;
@@ -1106,7 +1185,12 @@ $("#np2-queue").addEventListener("click", () => openDrawer("queue"));
 $("#np2-drawer-close").addEventListener("click", closeDrawer);
 npDrawer.addEventListener("click", (e) => {
   const item = e.target.closest("[data-dq]");
-  if (item) loadTrack(Number(item.dataset.dq), true);
+  if (!item) return;
+  const i = Number(item.dataset.dq);
+  // in a session the row is an index into the shared queue, so the tap is a
+  // request to move everyone — not a local jump nobody else would hear
+  if (inJam()) return jamControl(api.jamPlay, i);
+  loadTrack(i, true);
 });
 $("#np2-artist").addEventListener("click", () => {
   if (!state.current?.artistId) return;
@@ -1429,12 +1513,49 @@ function upcomingIndices() {
   return [...state.queue.keys()].slice(state.qIndex + 1);
 }
 
+/* ---- what the queue looks like ----
+   One description of the queue, drawn by three surfaces: the side panel, the
+   phone drawer, and a session. They used to each work it out for themselves,
+   from different state, and drifted apart — the drawer still listed the local
+   queue while a jam was playing, and clicking a row there started a song
+   nobody else could hear.
+
+   In play order: what's on now, the picks people added by hand, whatever
+   context is running, and the autoplay tail. The picks bucket is a leading
+   run of `queued` songs and the autoplay bucket a genuine tail — if you've
+   skipped back so the two interleave, they stay in one honest list rather
+   than being sorted into headings that lie about the order. */
+function queueView() {
+  const jam = inJam();
+  const songs = jam ? state.jam.queue : state.queue;
+  const cur = jam ? state.jam.index : state.qIndex;
+  const up = jam ? [...songs.keys()].slice(cur + 1) : upcomingIndices();
+  let head = 0;
+  while (head < up.length && songs[up[head]]?.queued) head++;
+  let tail = up.length;
+  while (tail > head && songs[up[tail - 1]]?.auto) tail--;
+  return {
+    songs,
+    cur: songs[cur] ? cur : -1,
+    up,
+    queued: up.slice(0, head),
+    next: up.slice(head, tail),
+    // a radio station is a context, not a machine guess — it keeps its name
+    autos: state.radio && !jam ? [] : up.slice(tail),
+    nextTitle: state.radio && !jam ? `Next · ${esc(state.radio.name)} Radio` : "Next up",
+  };
+}
+
 function renderQueuePanel() {
+  // On a phone the drawer *is* the queue and the side panel stays shut, so it
+  // repaints before the panel gets to bow out.
+  if (drawerMode === "queue") paintDrawer();
   const panel = $("#queue-panel");
   if (panel.classList.contains("hidden")) return;
   const list = $("#queue-list");
-  $("#queue-title").textContent = inJam() ? "Jam" : "Queue";
+  $("#queue-title").textContent = inJam() ? jamCopy(jamMode()).title : "Queue";
   if (inJam()) return renderJamQueue(list);
+  const v = queueView();
   if (!state.queue.length) {
     list.innerHTML = `<div class="queue-empty">Nothing queued.<br>Play something!</div>`;
     return;
@@ -1460,33 +1581,23 @@ function renderQueuePanel() {
       </div>
     </div>`;
   };
+  // one "Clear" for the whole of what's coming, on whichever heading is first
+  let clearable = v.up.length;
+  const section = (title) => {
+    const btn = clearable ? `<button class="queue-clear" id="queue-clear-up">Clear</button>` : "";
+    clearable = 0;
+    return `<div class="queue-section">${title}${btn}</div>`;
+  };
   let html = "";
-  if (state.current) {
-    html += `<div class="queue-section">Now playing</div>${item(state.qIndex, true)}`;
-  }
-  const up = upcomingIndices();
-  const { picks, autos } = state.radio
-    ? { picks: up, autos: [] }
-    : splitAutoTail(up, (i) => state.queue[i].auto);
-  if (picks.length) {
-    html += `<div class="queue-section">${
-      state.radio ? `Next · ${esc(state.radio.name)} Radio` : autos.length ? "Next in queue" : "Next up"}
-      <button class="queue-clear" id="queue-clear-up">Clear</button></div>`;
-    html += picks.map((i) => item(i, false)).join("");
-  }
-  if (autos.length) {
-    html += `<div class="queue-section">Next up · Autoplay${
-      picks.length ? "" : `<button class="queue-clear" id="queue-clear-up">Clear</button>`}</div>`;
-    html += autos.map((i) => item(i, false)).join("");
-  }
+  if (v.cur >= 0) html += `<div class="queue-section">Now playing</div>${item(v.cur, true)}`;
+  if (v.queued.length) html += section("Next in queue") + v.queued.map((i) => item(i, false)).join("");
+  if (v.next.length) html += section(v.nextTitle) + v.next.map((i) => item(i, false)).join("");
+  if (v.autos.length) html += section("Next up · Autoplay") + v.autos.map((i) => item(i, false)).join("");
   list.innerHTML = html;
   const clear = $("#queue-clear-up");
   if (clear) clear.onclick = (e) => {
     e.stopPropagation();
-    state.queue = state.queue.slice(0, state.qIndex + 1);
-    state.order = null;
-    state.pos = 0;
-    if (state.shuffle) buildShuffleOrder(state.qIndex);
+    dropQueueIndices(new Set(v.up));
     renderQueuePanel();
     savePlayerState(true);
   };
@@ -1527,56 +1638,62 @@ $("#queue-list").addEventListener("drop", (e) => {
   const row = e.target.closest(".queue-item");
   if (qDragFrom == null || !row) return;
   e.preventDefault();
-  const to = Number(row.dataset.qi);
   const from = qDragFrom;
   qDragFrom = null;
-  if (to === from) return;
-  const playingId = state.current?.id;
-  const [moved] = state.queue.splice(from, 1);
-  state.queue.splice(to, 0, moved);
-  // The pointer has to follow the track that's actually playing, not its index.
-  state.qIndex = state.queue.findIndex((s) => s.id === playingId);
-  if (state.shuffle) buildShuffleOrder(state.qIndex);
+  moveInQueue(from, Number(row.dataset.qi));
   renderQueuePanel();
   savePlayerState(true);
 });
 
+/* ---- one click handler for the whole list ----
+   There were two, and both ran on every click: the first acted on the button
+   you pressed and called stopPropagation(), which does nothing to a second
+   listener on the same element. So removing a song also *played* whatever
+   song had just slid into that row's index — and toggling repeat on a track
+   jumped the queue to it. One handler, one decision, most specific first. */
 $("#queue-list").addEventListener("click", (e) => {
+  // in a session, rows address the shared queue and edits go to the server
+  const rm = e.target.closest("[data-jqr]");
+  if (rm) return jamControl(api.jamRemove, Number(rm.dataset.jqr));
+  const jamRow = e.target.closest("[data-jqi]");
+  if (jamRow) return jamControl(api.jamPlay, Number(jamRow.dataset.jqi));
+
   const flag = e.target.closest("[data-qflag]");
-  if (flag) {
-    e.stopPropagation();
-    const id = flag.dataset.qid;
-    const cur = queueFlags.get(id) || {};
-    const key = flag.dataset.qflag;
-    queueFlags.set(id, { ...cur, [key]: !cur[key] });
-    if (key === "shuffle" && !cur.shuffle) {
-      // Shuffling "from here" jumbles everything after this track, in place.
-      const at = state.queue.findIndex((s) => s.id === id);
-      const tail = state.queue.slice(at + 1);
-      for (let i = tail.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [tail[i], tail[j]] = [tail[j], tail[i]];
-      }
-      state.queue = [...state.queue.slice(0, at + 1), ...tail];
-      toast("Shuffled the rest of the queue");
-    }
+  if (flag) return toggleQueueFlag(flag.dataset.qid, flag.dataset.qflag);
+
+  const remove = e.target.closest("[data-qremove]");
+  if (remove) {
+    const i = Number(remove.dataset.qremove);
+    if (i === state.qIndex) return toast("That one's playing right now", true);
+    dropQueueIndices(new Set([i]));
     renderQueuePanel();
     savePlayerState(true);
     return;
   }
-  const remove = e.target.closest("[data-qremove]");
-  if (remove) {
-    e.stopPropagation();
-    const i = Number(remove.dataset.qremove);
-    if (i === state.qIndex) return toast("That one's playing right now", true);
-    const playingId = state.current?.id;
-    state.queue.splice(i, 1);
-    state.qIndex = state.queue.findIndex((s) => s.id === playingId);
-    if (state.shuffle) buildShuffleOrder(state.qIndex);
-    renderQueuePanel();
-    savePlayerState(true);
-  }
+
+  const row = e.target.closest(".queue-item");
+  if (row) loadTrack(Number(row.dataset.qi), true);
 });
+
+function toggleQueueFlag(id, key) {
+  const cur = queueFlags.get(id) || {};
+  queueFlags.set(id, { ...cur, [key]: !cur[key] });
+  if (key === "shuffle" && !cur.shuffle) {
+    // Shuffling "from here" jumbles everything after this track, in place.
+    const at = state.queue.findIndex((s) => s.id === id);
+    const tail = state.queue.slice(at + 1);
+    for (let i = tail.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [tail[i], tail[j]] = [tail[j], tail[i]];
+    }
+    state.queue = [...state.queue.slice(0, at + 1), ...tail];
+    state.order = null; // the array order *is* the order now
+    if (state.qIndex > at) state.qIndex = at; // can't happen, but don't strand it
+    toast("Shuffled the rest of the queue");
+  }
+  renderQueuePanel();
+  savePlayerState(true);
+}
 
 function renderJamQueue(list) {
   const j = state.jam;
@@ -1607,40 +1724,16 @@ function renderJamQueue(list) {
       ${!playing && jamCanControl() ? `<button class="icon-btn qi-remove" data-jqr="${i}" title="Remove from the jam">${I.close}</button>` : ""}
     </div>`;
   };
-  if (j.index >= 0 && j.queue[j.index]) {
-    html += `<div class="queue-section">Now playing</div>${item(j.index, true)}`;
-  }
   // what people queued comes first, then what autoplay filled in — shown as
   // two sections so it's obvious a new pick jumps ahead of the suggestions
-  const up = [...j.queue.keys()].slice(j.index + 1);
-  const { picks, autos } = splitAutoTail(up, (i) => j.queue[i].auto);
-  if (picks.length) {
-    html += `<div class="queue-section">${autos.length ? "Next in queue" : "Next up"}</div>` +
-      picks.map((i) => item(i, false)).join("");
-  }
-  if (autos.length) {
-    html += `<div class="queue-section">Next up · Autoplay</div>` + autos.map((i) => item(i, false)).join("");
-  }
+  const v = queueView();
+  if (v.cur >= 0) html += `<div class="queue-section">Now playing</div>${item(v.cur, true)}`;
+  if (v.next.length) html += `<div class="queue-section">${v.autos.length ? "Next in queue" : "Next up"}</div>` +
+    v.next.map((i) => item(i, false)).join("");
+  if (v.autos.length) html += `<div class="queue-section">Next up · Autoplay</div>` +
+    v.autos.map((i) => item(i, false)).join("");
   list.innerHTML = html;
 }
-
-// Split upcoming indices into "picks" and the autoplay tail — but only when
-// the tail really is a tail (every auto song after the first one). If someone
-// backed up into the picks, the two interleave and one flat list is honest.
-function splitAutoTail(up, isAuto) {
-  const k = up.findIndex(isAuto);
-  if (k === -1 || !up.slice(k).every(isAuto)) return { picks: up, autos: [] };
-  return { picks: up.slice(0, k), autos: up.slice(k) };
-}
-
-$("#queue-list").addEventListener("click", (e) => {
-  const rm = e.target.closest("[data-jqr]");
-  if (rm) return jamControl(api.jamRemove, Number(rm.dataset.jqr));
-  const jamRow = e.target.closest("[data-jqi]");
-  if (jamRow) return jamControl(api.jamPlay, Number(jamRow.dataset.jqi));
-  const el = e.target.closest(".queue-item");
-  if (el) loadTrack(Number(el.dataset.qi), true);
-});
 
 /* ---------------- shared listening: jams & listen together ----------------
    The server clock owns playback: state is { index, playing, pos, at } with
@@ -1655,7 +1748,6 @@ $("#queue-list").addEventListener("click", (e) => {
 let jamES = null; // EventSource
 let jamLoadedKey = ""; // `${index}:${songId}` this client's UI is showing
 let jamRecheckAt = 0; // throttle for "does my jam still exist?" after ES errors
-let jamDriftAt = 0;
 let jamTicker = null; // remote-control progress timer (no audio to drive the bar)
 
 const inJam = () => !!state.jam;
@@ -1726,6 +1818,15 @@ function jamTargetPos() {
   if (!j) return 0;
   if (!j.playing) return j.pos;
   return Math.max(0, j.pos + (Date.now() + j.offset - j.at) / 1000);
+}
+
+// Is the current track due to run out about now? `ends` is the server-time
+// boundary it told us about; a session with no boundary (a track of unknown
+// length) is always "due", since nothing else is going to move it along.
+function jamAtBoundary(slack = 1500) {
+  const j = state.jam;
+  if (!j?.ends) return true;
+  return Date.now() + j.offset >= j.ends - slack;
 }
 
 /* ---- clock offset ----
@@ -1810,6 +1911,7 @@ function jamApplyState(snap) {
     playing: snap.playing,
     pos: snap.pos,
     at: snap.at,
+    ends: snap.ends || 0,
   });
   jamAdoptOffset(snap.now);
 }
@@ -1820,107 +1922,102 @@ function jamAdoptOffset(serverNow) {
     state.jam.offset = serverNow - Date.now();
 }
 
-/* ---- drift correction ----
-   In a jam this barely matters: one device makes sound, so the only job is
-   keeping the seek bar honest, and a lazy 2.5s tolerance avoids pointless
-   seeking. Listen together is the opposite — being a second apart from your
-   friends is the whole failure mode, but hard-seeking to fix it is an audible
-   glitch. So: nudge playbackRate for small drift (inaudible at ±3%, closes a
-   200ms gap in a few seconds) and only seek when we're too far out for a
-   nudge to catch up in reasonable time. */
-const JAM_DRIFT_SEEK = 1.0; // past this, a nudge would take too long — seek
-const JAM_DRIFT_NUDGE = 0.15; // inside this we're in sync; run at exactly 1×
-const JAM_RATE_MAX = 0.03; // ±3%, comfortably below the audible-pitch floor
-const JAM_DRIFT_TOLERANCE = 2.5; // jam mode: nobody is listening in parallel
-const JAM_SEEK_HOLDOFF = 5000; // ms between hard seeks — let one land first
-const JAM_LEAD_MAX = 2.0; // cap on the seek lead we'll compensate for
+/* ---- staying in sync ----
+   Sync is one promise: everyone starts the same song at the same instant.
+   The server schedules that instant and hands it to us up front (`ends`), so
+   there is exactly one moment per track that needs arranging — and in between
+   we do nothing at all.
 
-/* A hard seek is not free: the proxy has to open a fresh ranged request
-   upstream, so playback resumes some hundreds of ms (on a phone, seconds)
-   after we ask — and by then we're behind again. Naively re-seeking every
-   check turns that into a stutter loop: seek, stall, fall behind, seek…
-   Three defences: (1) never hard-seek while the element is stalled or
-   starving — it can't help, and the rate nudge is paused anyway; (2) after a
-   hard seek, hold off further ones so it can settle; (3) aim past the target
-   by the lead we measured last time (issue → `playing`), so we land on the
-   beat instead of a step behind it. */
-let jamSeekAt = 0; // when the last hard seek was issued
-let jamSeekLead = 0; // seconds a hard seek has been costing us lately (EMA)
-let jamStalledAt = 0; // last `waiting`/`stalled` — buffer ran dry
+   The nothing is the point. This used to chase the server clock the whole way
+   through a song, nudging playbackRate and hard-seeking whenever the gap
+   opened up, and every correction was audible. A seek is not free: the proxy
+   opens a fresh ranged request upstream, so playback resumes hundreds of ms
+   later (on a phone, seconds) and by then we're further behind than when we
+   started — seek, stall, fall behind, seek. Two devices doing that at each
+   other never settle, which is exactly what a jam sounded like.
+
+   So the playhead gets placed once, when a track starts or the transport
+   moves (play, pause, seek, this device taking over the audio), and then it's
+   left alone. Nothing pulls the clocks apart mid-song — the audio just plays.
+   The next boundary is the next thing that happens, and it reaches everyone
+   from the server at the same moment. */
+const JAM_ALIGN_TOLERANCE = 0.15; // inside this we're together — don't touch it
+const JAM_START_FLOOR = 0.3; // this close to 0:00, just play from the top
+const JAM_LEAD_MAX = 2.0; // cap on the start-up lead we'll compensate for
+const JAM_RECOVER_DRIFT = 0.5; // a stall cost us this much — take it back
+const JAM_RECOVER_HOLDOFF = 8000; // …but not over and over
+
+let jamPlacedAt = 0; // when the last placement was issued
+let jamStartLead = 0; // seconds starting a stream has been costing us (EMA)
+let jamStalledAt = 0; // last `waiting`/`stalled` — the buffer ran dry
 let jamPlayingAt = 0; // last `playing` — buffer refilled / play resumed
-let jamSyncPending = false; // a loadedmetadata sync is already queued
+let jamRecoverAt = 0; // last post-stall realignment
+let jamSyncPending = false; // a loadedmetadata alignment is already queued
 
 audio.addEventListener("error", () => { jamSyncPending = false; }); // no metadata coming
 audio.addEventListener("waiting", () => { jamStalledAt = Date.now(); });
 audio.addEventListener("stalled", () => { jamStalledAt = Date.now(); });
 audio.addEventListener("playing", () => {
+  const recovering = jamStalledAt > jamPlayingAt;
   jamPlayingAt = Date.now();
-  if (jamSeekAt && jamPlayingAt - jamSeekAt < 10_000) {
-    // how long the last hard seek took to start sounding
-    const took = Math.min(JAM_LEAD_MAX, (jamPlayingAt - jamSeekAt) / 1000);
-    jamSeekLead = jamSeekLead ? jamSeekLead * 0.6 + took * 0.4 : took;
+  if (jamPlacedAt && jamPlayingAt - jamPlacedAt < 10_000) {
+    // how long the last placement took to start sounding, so the next one can
+    // aim past its target and land on the beat instead of a step behind it
+    const took = Math.min(JAM_LEAD_MAX, (jamPlayingAt - jamPlacedAt) / 1000);
+    jamStartLead = jamStartLead ? jamStartLead * 0.6 + took * 0.4 : took;
   }
+  jamPlacedAt = 0;
+  /* The one exception to leaving a playing track alone: a stall already broke
+     the music, and left us behind by however long the buffer was dry. Taking
+     that back now adds no glitch that isn't already there — and it's the only
+     thing that puts time between us in the first place. */
+  if (!recovering || !inJam() || !jamPlaysAudio() || !state.jam.playing) return;
+  if (Date.now() - jamRecoverAt < JAM_RECOVER_HOLDOFF) return;
+  if (Math.abs((audio.currentTime || 0) - jamTargetPos()) < JAM_RECOVER_DRIFT) return;
+  jamRecoverAt = Date.now();
+  jamAlign();
 });
 
-// starved: buffering now, or hasn't recovered since the last stall
-const jamStarved = () =>
-  audio.readyState < 3 || (jamStalledAt > jamPlayingAt && Date.now() - jamStalledAt < 8000);
-
-function jamSetRate(rate) {
-  if (Math.abs(audio.playbackRate - rate) > 0.0005) audio.playbackRate = rate;
+function placePlayhead(target) {
+  jamPlacedAt = Date.now();
+  audio.currentTime = Math.max(0, target);
 }
 
-function jamHardSeek(target) {
-  jamSeekAt = Date.now();
-  audio.currentTime = target;
+// is that moment already downloaded? Landing inside the buffer is instant;
+// landing outside it means waiting on a fresh ranged request.
+function jamBuffered(t) {
+  for (let i = 0; i < audio.buffered.length; i++)
+    if (t >= audio.buffered.start(i) && t <= audio.buffered.end(i)) return true;
+  return false;
 }
 
-function jamSyncPosition() {
-  // `initial` = the track just loaded and hasn't sounded yet: place the head
-  // outright (nothing to stutter), no hold-off, no starved gate.
-  const apply = (initial = false) => {
-    if (!inJam()) return;
+/* Put the playhead where the session is — once. */
+function jamAlign() {
+  const place = () => {
+    if (!inJam() || !jamPlaysAudio()) return;
     const target = jamTargetPos();
-    const drift = (audio.currentTime || 0) - target; // >0 = we're ahead
-    if (!isTogether()) {
-      // past the end (everyone lagged): the seek clamps, `ended` fires, and
-      // the ended report advances the session — exactly what we want
-      if (Math.abs(drift) > JAM_DRIFT_TOLERANCE) jamHardSeek(target);
+    if (!state.jam.playing) {
+      // parked: land on the same frame everyone else is parked on, so the
+      // resume starts the room together
+      if (Math.abs((audio.currentTime || 0) - target) > JAM_ALIGN_TOLERANCE) placePlayhead(target);
       return;
     }
-    if (!state.jam.playing || audio.paused) {
-      jamSetRate(1);
-      // paused: line up exactly, so resume starts everyone together
-      if (Math.abs(drift) > JAM_DRIFT_NUDGE) jamHardSeek(target);
-      return;
-    }
-    if (initial) {
-      jamSetRate(1);
-      // the stream takes a moment to start; aim ahead by what that has been
-      // costing so the first note lands with everyone else's
-      if (target + jamSeekLead > JAM_DRIFT_NUDGE) jamHardSeek(target + jamSeekLead);
-      return;
-    }
-    if (Math.abs(drift) > JAM_DRIFT_SEEK) {
-      jamSetRate(1);
-      if (jamStarved()) return; // buffering — a seek only stalls it again
-      if (Date.now() - jamSeekAt < JAM_SEEK_HOLDOFF) return; // let the last one land
-      // behind: lead the target by what a seek costs, so we arrive on time
-      // rather than a step late. Ahead: never lead (that's a rewind).
-      jamHardSeek(target + (drift < 0 ? jamSeekLead : 0));
-      return;
-    }
-    if (jamStarved()) return jamSetRate(1); // don't steer an empty buffer
-    if (Math.abs(drift) <= JAM_DRIFT_NUDGE) return jamSetRate(1);
-    // steer toward the target: ahead → slow down, behind → speed up
-    jamSetRate(1 - Math.max(-JAM_RATE_MAX, Math.min(JAM_RATE_MAX, drift / 4)));
+    // A placement that has to fetch doesn't sound until the fetch lands, so
+    // aim past the target by what that's been costing and arrive on the beat.
+    // One that's already buffered starts instantly and needs no lead — adding
+    // one there would put us ahead by exactly the amount we saved.
+    const want = target + (jamBuffered(target) ? 0 : jamStartLead);
+    // at the top of a track there's nothing to skip past, and seeking a
+    // fraction of a second in buys a fresh ranged request for no gain
+    if (want < JAM_START_FLOOR) return;
+    if (Math.abs((audio.currentTime || 0) - want) > JAM_ALIGN_TOLERANCE) placePlayhead(want);
   };
-  if (audio.readyState >= 1) return apply(false);
+  if (audio.readyState >= 1) return place();
   if (jamSyncPending) return; // one listener is enough — it reads live state
   jamSyncPending = true;
   audio.addEventListener("loadedmetadata", () => {
     jamSyncPending = false;
-    apply(true);
+    place();
   }, { once: true });
 }
 
@@ -1959,7 +2056,6 @@ function jamApplyPlayback(opts = {}) {
   if (!plays) {
     // this device is a remote control: it shows the jam, the speaker sounds it
     if (!audio.paused) audio.pause();
-    jamSetRate(1);
     hideJamResume();
     updatePlayButton();
     return;
@@ -1968,10 +2064,10 @@ function jamApplyPlayback(opts = {}) {
   // the speaker role after tracks moved on still loads the right stream
   const want = streamSrc(song);
   if (!audio.src || !audio.src.endsWith(want)) audio.src = want;
-  // Only re-check the position when the transport actually moved (a sync, a
-  // new track, a role change). A queue edit — someone adding a song — used to
-  // run this too, and a mid-song hard seek was the audible result.
-  if (changed || opts.sync) jamSyncPosition();
+  // The playhead is placed only when the transport actually moved: a new
+  // track, a sync, this device taking over the audio. A queue edit — someone
+  // adding a song — used to run this too, and a mid-song seek was the result.
+  if (changed || opts.sync) jamAlign();
   if (j.playing) {
     audio.play().then(hideJamResume).catch(showJamResume);
   } else {
@@ -2020,18 +2116,6 @@ const seekDuration = () =>
     : sonosActive()
     ? sonosDur || state.current?.duration || 0
     : audio.duration || 0;
-
-// periodic nudge back into sync (buffering, tab throttling, …). Listen
-// together checks four times as often: it's steering with playbackRate, which
-// needs to see the drift shrink to know when to stop.
-function jamDriftCheck() {
-  if (Date.now() - jamDriftAt < (isTogether() ? 750 : 3000)) return;
-  jamDriftAt = Date.now();
-  const j = state.jam;
-  if (!j?.playing || !jamSong() || audio.paused || audio.readyState < 2)
-    return jamSetRate(1);
-  jamSyncPosition();
-}
 
 /* the browser blocked un-gestured playback — one tap re-joins the music.
    In a jam only the speaker ever sees this (remotes are silent by design);
@@ -2084,7 +2168,6 @@ function exitJamMode(msg) {
   }
   jamStopClock();
   jamSyncTicker(); // stops the remote progress timer
-  jamSetRate(1); // drop any drift-correction nudge
   hideJamResume();
   jamLoadedKey = "";
   // keep the music going: the jam queue becomes your local queue
@@ -2092,7 +2175,6 @@ function exitJamMode(msg) {
     state.queue = j.queue.slice();
     state.qIndex = j.index;
     state.current = j.queue[j.index];
-    state.insertAt = j.index + 1;
     state.order = null;
     // a remote never loaded the stream — give it a playable (paused) src so
     // the play button works, picking up from where the jam was
@@ -2143,7 +2225,7 @@ function jamOpenEvents() {
     if (!inJam()) return;
     const s = parse(e);
     Object.assign(state.jam, {
-      index: s.index, playing: s.playing, pos: s.pos, at: s.at,
+      index: s.index, playing: s.playing, pos: s.pos, at: s.at, ends: s.ends || 0,
     });
     jamAdoptOffset(s.now);
     jamApplyPlayback({ sync: true });
@@ -3414,6 +3496,7 @@ const TYPES = {
   playlist: { label: "Playlist", icon: "stack",   note: "many artists, one list" },
   mix:      { label: "Mix",      icon: "sparkle", note: "built from your history" },
   single:   { label: "Single",   icon: "disc",    note: "one track, plays now" },
+  video:    { label: "Video",    icon: "tv",      note: "the film clip, plays now" },
   album:    { label: "Album",    icon: "sleeve",  note: "a full release" },
   ep:       { label: "EP",       icon: "sleeve",  note: "a short release" },
   station:  { label: "Station",  icon: "waves",   note: "endless, never ends" },
@@ -3601,8 +3684,8 @@ view.addEventListener("click", async (e) => {
       if (playClicked && homeTrending.length) playQueue(homeTrending, 0);
       else location.hash = "#/trending";
     } else if (kind === "history") {
-      const songs = state.library.history;
-      playQueue(songs, Number(card.dataset.idx));
+      // The shelf renders homeRecents (deduped), so indices belong to it.
+      playQueue(homeRecents, Number(card.dataset.idx));
     } else if (kind === "playlist") {
       location.hash = `#/playlist/${card.dataset.id}`;
     } else if (kind === "liked") {
@@ -3724,6 +3807,18 @@ function renderHome() {
   const cold = !history.length && !playlists.length && !state.library.liked.length;
   const rows = homeLayout();
 
+  // History is deduped by videoId server-side, but the same song played as an
+  // album cut and as its video still shows up twice — and "Jump back in" with
+  // Blinding Lights in it twice reads as a glitch. Collapse to the most
+  // recent copy; clicks queue from this list so the shelf and the queue agree.
+  const seenSongs = new Set();
+  homeRecents = history.filter((s) => {
+    const k = songKey(s);
+    if (seenSongs.has(k)) return false;
+    seenSongs.add(k);
+    return true;
+  });
+
   const shortcuts = [
     state.library.liked.length
       ? `<div class="shortcut" data-card="liked"><span class="liked-cover">${I.heartFill}</span><span class="sc-name">Liked Songs</span></div>`
@@ -3758,11 +3853,11 @@ function renderHome() {
     if (row.id === "quickpicks") return `<div class="section" id="home-quickpicks"></div>`;
     if (row.id === "mixes") return `<div class="section" id="home-mixes"></div>`;
     if (row.id === "history")
-      return history.length ? `
+      return homeRecents.length ? `
         <div class="section">
           <h2>Jump back in</h2>
           <div class="card-grid shelf">
-            ${history.slice(0, 14).map((s, i) =>
+            ${homeRecents.slice(0, 14).map((s, i) =>
               CARD({ kind: "history", type: "single", attrs: `data-idx="${i}"`, image: s.image, title: s.title, sub: s.artist })
             ).join("")}
           </div>
@@ -3785,14 +3880,15 @@ function renderHome() {
         ${I.note}
         <h2>Welcome to Marusic</h2>
         <p>Your personal streaming player, powered by the music-cli backend.
-        Head to <a href="#/search" style="color:var(--accent);font-weight:700">Search</a> to find your first song,
+        Type in the search field to find your first song, pick a genre under
+        <a href="#/browse" style="color:var(--accent);font-weight:700">Browse</a>,
         or tune into a <a href="#/radio" style="color:var(--accent);font-weight:700">Radio</a> station.</p>
       </div>` : ""}
     <div id="home-rows">
       ${rows.filter((r) => homeEditing || !r.hidden).map((r) => wrap(r, bodyFor(r))).join("")}
     </div>`;
 
-  viewCtx = { songs: history.slice(0, 100), playlistId: null };
+  viewCtx = { songs: homeRecents.slice(0, 100), playlistId: null };
   setTabTitle("Home");
 
   $("#home-customise").onclick = () => { homeEditing = !homeEditing; renderHome(); };
@@ -3870,6 +3966,7 @@ view.addEventListener("dragend", () => {
 
 let homeTrending = [];        // the trending singles, as one playlist
 let homeTrendingReleases = []; // trending albums & EPs, shown beside it
+let homeRecents = [];         // history with same-song re-uploads collapsed
 let homeMixes = [];
 let homeQuickPicks = [];
 
@@ -4126,13 +4223,17 @@ const searchSection = (title, body, seeAll) =>
    header's search icon on phones (where the empty Search page also shows this
    grid under the field). Either way a tile is a search. */
 function renderBrowse() {
+  // The suggestion strip only belongs to the search route, where it tracks
+  // what's being typed. On the Browse tab it would replay whatever the last
+  // query was — related searches for a search you already left.
+  const onSearch = currentRoute === "search";
   view.innerHTML = `
-    <div id="search-suggest"></div>
+    ${onSearch ? `<div id="search-suggest"></div>` : ""}
     <h1 class="page-title">Browse everything</h1>
     ${browseSectionsHTML()}`;
   viewCtx = { songs: [], playlistId: null };
-  setTabTitle(currentRoute === "browse" ? "Browse" : "Search");
-  paintSuggestions();
+  setTabTitle(onSearch ? "Search" : "Browse");
+  if (onSearch) paintSuggestions();
 }
 
 function renderSearch() {
@@ -4233,7 +4334,7 @@ function paintSearch(q) {
                       counts.singles > 10 ? "singles" : "")}
       ${searchSection("Videos", counts.videos ? `<div class="card-grid">${
         d.videos.slice(0, 10).map((v, i) =>
-          CARD({ kind: "video", type: "single", attrs: `data-idx="${i}"`, image: v.image, title: v.title, sub: v.artist })
+          CARD({ kind: "video", type: "video", attrs: `data-idx="${i}"`, image: v.image, title: v.title, sub: v.artist })
         ).join("")}</div>` : "", counts.videos > 10 ? "videos" : "")}
       ${searchSection("Playlists", counts.playlists ? `<div class="card-grid">${ytPlaylistCards(d.playlists.slice(0, 10))}</div>` : "",
                       counts.playlists > 10 ? "playlists" : "")}`;
@@ -4373,7 +4474,12 @@ function fetchSuggestions() {
 searchInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     clearTimeout(searchTimer);
-    renderSearch();
+    // Mirror the debounce path above: off the search route, the hash change
+    // is what renders. Calling renderSearch() directly from another route
+    // painted a spinner whose response was then dropped by the
+    // `currentRoute !== "search"` guard — an everlasting spinner.
+    if (currentRoute !== "search") location.hash = "#/search";
+    else renderSearch();
   }
 });
 
@@ -4613,7 +4719,7 @@ function paintArtist(id) {
 
 // A discography that starts collapsed, remembers grid-vs-list, and never makes
 // you scroll past forty covers to reach the next section.
-function discographyHTML(heading, list, type, artistName, key) {
+function discographyHTML(heading, list, type, artistName, key, total = list.length) {
   if (!list.length) return "";
   const open = prefs.discoOpen;
   const grid = prefs.discoGrid;
@@ -4634,11 +4740,14 @@ function discographyHTML(heading, list, type, artistName, key) {
       <h2 class="disco-head">
         <button class="disco-toggle" data-disco-toggle="${key}" aria-expanded="${open}">
           <span class="disco-caret">${I.chevronRight}</span>${esc(heading)}
-          <span class="disco-count">${list.length}</span>
+          <span class="disco-count">${total}</span>
         </button>
-        <span class="seg small">
-          <button data-disco-view="grid" class="${grid ? "on" : ""}" title="Grid">${I.grid}</button>
-          <button data-disco-view="list" class="${grid ? "" : "on"}" title="List">${I.rows}</button>
+        <span class="disco-tools">
+          ${total > list.length ? `<button class="see-all" data-disco-all="${key}">Show all</button>` : ""}
+          <span class="seg small">
+            <button data-disco-view="grid" class="${grid ? "on" : ""}" title="Grid">${I.grid}</button>
+            <button data-disco-view="list" class="${grid ? "" : "on"}" title="List">${I.rows}</button>
+          </span>
         </span>
       </h2>
       <div class="disco-body${open ? "" : " collapsed"}">
@@ -4677,25 +4786,42 @@ function paintArtistBody(id) {
         <h2>Top songs <span class="h2-note">everyone</span></h2>
         <div id="artist-top"></div>
       </div>` : ""}
-      ${discographyHTML("Albums", artist.albums.slice(0, 8), "album", artist.name, "albums")}
-      ${discographyHTML("Singles &amp; EPs", artist.singles.slice(0, 8), "ep", artist.name, "singles")}
+      ${discographyHTML("Albums", artist.albums.slice(0, 8), "album", artist.name, "albums", artist.albums.length)}
+      ${discographyHTML("Singles & EPs", artist.singles.slice(0, 8), "ep", artist.name, "singles", artist.singles.length)}
       ${relatedSection}`;
-    // Both lists index into one array so row clicks resolve correctly.
-    const all = [...mine, ...artist.songs];
+    // Both lists index into one array so row clicks resolve correctly. A top
+    // song that already sits in "your plays" maps onto that entry instead of
+    // getting a second one — id match is exact, and a title+artist match
+    // collapses the same song under two videoIds, which is a safe guess only
+    // here, where both lists describe one artist's catalogue. Keeping the copy
+    // from `mine` keeps your play counts attached to the song that plays.
+    // Without this, playing through the page hit the big hits twice.
+    const mineAt = new Map();
+    mine.forEach((s, i) => {
+      if (!mineAt.has(s.id)) mineAt.set(s.id, i);
+      if (!mineAt.has(songKey(s))) mineAt.set(songKey(s), i);
+    });
+    const all = [...mine];
+    const topIdx = artist.songs.map((s) => {
+      const dup = mineAt.get(s.id) ?? mineAt.get(songKey(s));
+      if (dup !== undefined) return dup;
+      all.push(s);
+      return all.length - 1;
+    });
     viewCtx = { songs: all, playlistId: null };
     const mineEl = $("#artist-mine");
     if (mineEl) mineEl.innerHTML = trackListHTML(mine, { noAlbum: true });
     const topEl = $("#artist-top");
     if (topEl) {
       topEl.innerHTML = trackListHTML(artist.songs, { noAlbum: false });
-      topEl.querySelectorAll(".track").forEach((r, i) => (r.dataset.idx = mine.length + i));
+      topEl.querySelectorAll(".track").forEach((r, i) => (r.dataset.idx = topIdx[i]));
     }
   } else if (artistTab === "albums") {
     body.innerHTML = discographyHTML("Albums", artist.albums, "album", artist.name, "albums")
       || `<div class="search-empty"><h3>No albums listed</h3></div>`;
     viewCtx = { songs: [], playlistId: null };
   } else if (artistTab === "singles") {
-    body.innerHTML = discographyHTML("Singles &amp; EPs", artist.singles, "ep", artist.name, "singles")
+    body.innerHTML = discographyHTML("Singles & EPs", artist.singles, "ep", artist.name, "singles")
       || `<div class="search-empty"><h3>No singles or EPs listed</h3></div>`;
     viewCtx = { songs: [], playlistId: null };
   } else {
@@ -4726,6 +4852,13 @@ function paintArtistBody(id) {
 
 // Discography controls are delegated so they survive every repaint.
 view.addEventListener("click", (e) => {
+  const allBtn = e.target.closest("[data-disco-all]");
+  if (allBtn) {
+    // "Show all" on a truncated overview shelf is the same move as the tab.
+    artistTab = allBtn.dataset.discoAll;
+    paintArtist(decodeURIComponent(location.hash.split("/")[2] || ""));
+    return;
+  }
   const toggle = e.target.closest("[data-disco-toggle]");
   if (toggle) {
     const section = toggle.closest(".disco");
@@ -4856,7 +4989,7 @@ function renderPlaylist(id) {
     ${p.songs.length > 8 ? filterBarHTML(`Search ${p.name}`) : ""}
     ${p.songs.length
       ? trackListHTML(p.songs, { removable: true, reorderable: true, selectable: true })
-      : `<div class="search-empty"><h3>It's a bit quiet in here</h3><p>Use <a href="#/search" style="color:var(--accent);font-weight:700">Search</a> and the ＋ button on any song to fill this playlist.</p></div>`}`;
+      : `<div class="search-empty"><h3>It's a bit quiet in here</h3><p>Search for a song and use its ＋ button to fill this playlist, or start from a genre under <a href="#/browse" style="color:var(--accent);font-weight:700">Browse</a>.</p></div>`}`;
 
   viewCtx = { songs: p.songs, playlistId: p.id };
   setTabTitle(p.name);
@@ -6433,10 +6566,13 @@ function mountShelfControls(root = view) {
 
 /* ---------------- router ---------------- */
 // Which top-level tab owns each route — the tabs stay lit while you drill into
-// an album or an artist, so you never lose track of where you are.
+// an album or an artist, so you never lose track of where you are. Search and
+// everything reached from it belong to Browse: the Search tab it used to point
+// at was removed in favour of the ever-present field, and an owner no tab
+// carries would light nothing at all.
 const TAB_OWNER = {
   home: "home", trending: "home", radio: "home", jam: "home", together: "home",
-  search: "search", browse: "search", album: "search", artist: "search", ytplaylist: "search", shared: "search",
+  search: "browse", browse: "browse", album: "browse", artist: "browse", ytplaylist: "browse", shared: "browse",
   discover: "discover",
   library: "library", liked: "library", saves: "library", playlist: "library", smart: "library",
   profile: "profile", admin: "profile",

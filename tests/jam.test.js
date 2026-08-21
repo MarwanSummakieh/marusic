@@ -17,6 +17,15 @@ const song = (id, extra = {}) => ({
   ...extra,
 });
 
+// Wind the session to the end of the current track, the way three minutes of
+// listening would. Reports of a finished track are measured against the
+// scheduled boundary, so tests have to reach it before one counts.
+const atEnd = (jam) => {
+  jam.at = Date.now() - (jam.queue[jam.index].duration - jam.pos) * 1000;
+  jam.pos = 0;
+};
+const tick = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // capture every event a subscriber sees
 function listen(jam, u, deviceId = "") {
   const events = [];
@@ -169,14 +178,16 @@ test("transport: play/pause/seek/next/prev and server-clock position", () => {
   assert.equal(jam.pos, 0);
 });
 
-test("markEnded: first matching report advances, stragglers and paused no-op", () => {
+test("markEnded: a report at the boundary advances, stragglers and paused no-op", () => {
   const jam = jams.createJam(user("H"), { queue: [song("a"), song("b")], index: 0, playing: true });
   assert.equal(jams.markEnded(jam, 1), false); // wrong index
+  atEnd(jam);
   assert.equal(jams.markEnded(jam, 0), true);
   assert.equal(jam.index, 1);
   assert.equal(jam.playing, true);
   assert.equal(jams.markEnded(jam, 0), false); // straggler
 
+  atEnd(jam);
   assert.equal(jams.markEnded(jam, 1), true); // last track → stop at start
   assert.equal(jam.index, 1);
   assert.equal(jam.playing, false);
@@ -184,16 +195,80 @@ test("markEnded: first matching report advances, stragglers and paused no-op", (
   assert.equal(jams.markEnded(jam, 1), false); // paused → ignore
 });
 
-test("markEnded: the last track doesn't stop the jam while a refill is in flight", () => {
-  const jam = jams.createJam(user("H"), { queue: [song("a")], index: 0, playing: true }, "", "together");
-  jam.extending = Promise.resolve(); // server marks an autoplay refill in progress
-  assert.equal(jams.markEnded(jam, 0), false);
-  assert.equal(jam.playing, true); // still "playing", nobody got parked at 0:00
+test("markEnded: an early report is one client's short stream, not the boundary", () => {
+  const jam = jams.createJam(
+    user("H"), { queue: [song("a"), song("b")], index: 0, playing: true }, "", "together");
+  // three minutes to go: this device's stream ran out, nobody else's did
+  assert.equal(jams.markEnded(jam, 0, "device-B"), false);
   assert.equal(jam.index, 0);
-  jam.extending = false;
-  jams.extendQueue(jam, [song("b")]);
-  assert.equal(jams.markEnded(jam, 0), true);
+  assert.equal(jam.playing, true);
+  // a track with no duration metadata has no boundary to defer to, so there
+  // the first report is still the only signal we have
+  const open = jams.createJam(
+    user("H2"), { queue: [song("x", { duration: 0 }), song("y")], index: 0, playing: true },
+    "", "together");
+  assert.equal(jams.trackEndsAt(open), 0);
+  assert.equal(jams.markEnded(open, 0, "device-B"), true);
+  assert.equal(open.index, 1);
+});
+
+test("boundary: the server moves everyone to the next track on schedule", async () => {
+  const jam = jams.createJam(
+    user("H"),
+    { queue: [song("a", { duration: 0.05 }), song("b")], index: 0, playing: true },
+    "", "together"
+  );
+  const ears = listen(jam, { id: jam.hostId });
+  assert.ok(jams.trackEndsAt(jam) - Date.now() <= 50);
+  await tick(90);
   assert.equal(jam.index, 1);
+  assert.equal(jam.playing, true);
+  // the new track is dated from the boundary itself, not from whenever the
+  // timer happened to run, so every client derives the same position
+  assert.ok(Math.abs(jam.at - (jam.created + 50)) < 40);
+  const sync = ears.last("sync").data;
+  assert.equal(sync.index, 1);
+  assert.ok(sync.ends > sync.now);
+});
+
+test("boundary: the last track stops the session, and a refill restarts it", async () => {
+  const jam = jams.createJam(
+    user("H"), { queue: [song("a", { duration: 0.05 })], index: 0, playing: true }, "", "together");
+  jam.extending = Promise.resolve(); // an autoplay refill is in flight
+  await tick(90);
+  assert.equal(jam.playing, true); // still "playing" — nobody got parked at 0:00
+  assert.equal(jam.index, 0);
+
+  jam.extending = false;
+  jams.extendQueue(jam, [song("b")]); // the refill lands
+  await tick(20); // the boundary is already behind us: it fires immediately
+  assert.equal(jam.index, 1);
+  assert.equal(jam.playing, true);
+});
+
+test("boundary: nothing left to play stops the session, and a pick starts it again", async () => {
+  const jam = jams.createJam(
+    user("H"), { queue: [song("a", { duration: 0.05 })], index: 0, playing: true }, "", "together");
+  await tick(90);
+  assert.equal(jam.playing, false);
+  assert.equal(jam.pos, 0);
+  assert.equal(jam.ended, true);
+
+  jams.addSongs(jam, [song("b")], "Guest");
+  assert.equal(jam.playing, true);
+  assert.equal(jam.index, 1);
+  assert.equal(jam.queue[jam.index].id, "b");
+});
+
+test("boundary: it follows a seek, and a pause takes it off the clock", () => {
+  const jam = jams.createJam(user("H"), { queue: [song("a")], index: 0, playing: true });
+  const full = jams.trackEndsAt(jam);
+  jams.seekTo(jam, 150);
+  assert.ok(full - jams.trackEndsAt(jam) > 149_000); // 150s closer
+  jams.pauseJam(jam);
+  assert.equal(jams.trackEndsAt(jam), 0); // paused music doesn't run out
+  jams.resumeJam(jam);
+  assert.ok(jams.trackEndsAt(jam) - Date.now() > 49_000);
 });
 
 test("permissions: guestsControl gates guests, never the host", () => {
@@ -288,6 +363,7 @@ test("speaker: only the speaker device advances, transfer works, presence tracke
   assert.equal(jam.speakerId, "device-A");
 
   // a remote (or a spoofed report) can't advance the jam — only the speaker
+  atEnd(jam);
   assert.equal(jams.markEnded(jam, 0, "device-B"), false);
   assert.equal(jams.markEnded(jam, 0, ""), false);
   assert.equal(jams.markEnded(jam, 0, "device-A"), true);
@@ -312,6 +388,7 @@ test("speaker: only the speaker device advances, transfer works, presence tracke
   // legacy jams without a speaker keep democratic advancement
   const open = jams.createJam(user("O"), { queue: [song("x"), song("y")], index: 0, playing: true });
   assert.equal(open.speakerId, "");
+  atEnd(open);
   assert.equal(jams.markEnded(open, 0), true);
 });
 
@@ -352,14 +429,16 @@ test("mode: in listen together every device advances the track", () => {
     "",
     "together"
   );
-  // no speaker to gate on: whichever client's audio ends first wins, and the
-  // rest are no-ops because the index has already moved
+  // no speaker to gate on: once the boundary is here, any device's report
+  // will do, and the rest are no-ops because the index has already moved
+  atEnd(t);
   assert.equal(jams.markEnded(t, 0, "device-B"), true);
   assert.equal(t.index, 1);
   assert.equal(jams.markEnded(t, 0, "device-C"), false);
   assert.equal(jams.markEnded(t, 0, "device-B"), false);
   assert.equal(t.index, 1);
   // and the next track is advanced by whoever gets there first, not by name
+  atEnd(t);
   assert.equal(jams.markEnded(t, 1, "device-Z"), true);
   assert.equal(t.index, 2);
 });

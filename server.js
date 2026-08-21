@@ -4,7 +4,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as ytm from "./lib/ytmusic.js";
 import * as lossless from "./lib/lossless.js";
@@ -60,7 +60,10 @@ app.use((req, _res, next) => {
 const wrap = (fn) => (req, res) =>
   fn(req, res).catch((err) => {
     console.error(`[api] ${req.path}: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    // Once a stream has begun, .status() would throw ERR_HTTP_HEADERS_SENT
+    // inside this catch and become an unhandled rejection of its own.
+    if (res.headersSent) res.destroy();
+    else res.status(500).json({ error: err.message });
   });
 
 // ---------------------------------------------------------------------------
@@ -521,9 +524,10 @@ app.get("/api/download-lossless", requireAuth, wrap(async (req, res) => {
     "Content-Disposition",
     `attachment; filename="${ascii}.flac"; filename*=UTF-8''${encodeURIComponent(baseName)}.flac`
   );
-  const body = Readable.fromWeb(upstream.body);
-  res.on("close", () => body.destroy());
-  body.pipe(res);
+  // pipeline, not pipe: pipe() installs no error handlers, so a CDN reset
+  // mid-transfer raises an unhandled 'error' and takes the whole process
+  // down. pipeline tears both streams down and reports to the callback.
+  pipeline(Readable.fromWeb(upstream.body), res, () => {});
 }));
 
 const DL_MIME = {
@@ -556,11 +560,9 @@ async function sendTranscoded(res, id, fmt, baseName) {
       "Content-Disposition",
       `attachment; filename="${ascii}.${ext}"; filename*=UTF-8''${encodeURIComponent(baseName)}.${ext}`
     );
-    const stream = fs.createReadStream(filePath);
-    stream.on("close", cleanup);
-    stream.on("error", cleanup);
-    res.on("close", () => stream.destroy());
-    stream.pipe(res);
+    // pipeline calls back exactly once, success or failure, so the temp dir
+    // is removed on every path and stream errors can't escape as crashes.
+    pipeline(fs.createReadStream(filePath), res, cleanup);
   } catch (err) {
     cleanup();
     throw err;
@@ -604,9 +606,7 @@ app.get("/api/download-flac/:id", requireAuth, wrap(async (req, res) => {
         "Content-Disposition",
         `attachment; filename="${ascii}.flac"; filename*=UTF-8''${encodeURIComponent(baseName)}.flac`
       );
-      const body = Readable.fromWeb(upstream.body);
-      res.on("close", () => body.destroy());
-      return body.pipe(res);
+      return pipeline(Readable.fromWeb(upstream.body), res, () => {});
     }
     // resolved but the CDN refused — fall through to the transcode
   }
@@ -866,9 +866,11 @@ app.get("/api/stream/:id", streamAuth, wrap(async (req, res) => {
   }
   if (!upstream.headers.get("accept-ranges")) res.setHeader("Accept-Ranges", "bytes");
 
-  const body = Readable.fromWeb(upstream.body);
-  res.on("close", () => body.destroy());
-  body.pipe(res);
+  // pipeline, not pipe — see the lossless proxy above. This is the pipe every
+  // song rides for minutes at a time, so it is the likeliest place for a
+  // googlevideo reset to land; before pipeline() one such reset killed the
+  // whole server with no log line.
+  pipeline(Readable.fromWeb(upstream.body), res, () => {});
 }));
 
 // ---------------------------------------------------------------------------
@@ -1128,12 +1130,14 @@ function requireJamHost(req, res, next) {
 // queue up with related songs (the same automix continuation the local
 // player's autoplay uses) before advancing, so the music never stops.
 //
-// In listen-together every device reports the end of the last track within a
-// few hundred ms of each other. The first report starts the refill; the rest
-// must *wait for it* rather than skip it — otherwise the second report sees
-// "no next track" and stops the session, and the refill lands on a paused
-// jam parked at 0:00 of the song that just finished (press play: it repeats).
-// `extending` holds the in-flight promise so every caller rides the same one.
+// The store schedules this a good while before the track runs out (it knows
+// when that is), so the next song is normally sitting in the queue when the
+// boundary arrives. Everything else that can reach the end of a queue — a
+// tapped "next", a client's `ended` report — calls it too, and `extending`
+// holds the in-flight promise so every caller rides the same fetch instead of
+// racing it. A second caller that skipped the wait would see "no next track"
+// and stop the session, leaving the refill to land on a jam parked at 0:00 of
+// the song that just finished.
 async function refillJamIfEnding(j) {
   if (!j.settings.autoplay) return;
   if (j.extending) return j.extending;
@@ -1150,6 +1154,9 @@ async function refillJamIfEnding(j) {
   })();
   return j.extending;
 }
+
+// the store can't fetch recommendations itself — it asks us to, in time
+jam.onNeedsRefill((j) => { refillJamIfEnding(j); });
 
 app.post("/api/jam", requireAuth, (req, res) => {
   const { queue, index, pos, playing, deviceId, mode } = req.body || {};
@@ -1306,6 +1313,19 @@ setInterval(() => db.pruneSessions(SESSION_MAX_AGE), 24 * 60 * 60 * 1000).unref?
 
 // Garbage-collect jams nobody has been connected to for a while.
 setInterval(() => jam.sweepJams(10 * 60 * 1000), 60 * 1000).unref?.();
+
+// Last-resort visibility. The server once died mid-song with nothing in the
+// log, which cost an evening of guessing; whatever slips every guard above
+// must at least say what it was. A stray rejection is almost always a lost
+// network promise on a music box, so log it and keep playing; an uncaught
+// exception means unknown state, so log it and let Docker restart us.
+process.on("unhandledRejection", (err) => {
+  console.error(`[fatal?] unhandled rejection: ${err?.stack || err}`);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`[fatal] uncaught exception: ${err?.stack || err}`);
+  process.exit(1);
+});
 
 app.listen(config.port, () => {
   console.log(`Marusic running at http://localhost:${config.port}`);
