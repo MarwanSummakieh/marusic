@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import * as ytm from "./lib/ytmusic.js";
 import * as lossless from "./lib/lossless.js";
 import * as db from "./lib/db.js";
+import * as reco from "./lib/reco.js";
 import * as jam from "./lib/jam.js";
 import * as sonos from "./lib/upnp.js";
 import { config } from "./lib/config.js";
@@ -364,15 +365,9 @@ app.get("/api/mixes", requireAuth, wrap(async (req, res) => {
   const hit = mixCache.get(req.user.id);
   if (hit && hit.exp > Date.now()) return res.json(hit.data);
 
-  const seeds = [];
-  const seenArtists = new Set();
-  for (const s of db.getHistory(req.user.id)) {
-    const key = (s.artist || s.id).toLowerCase();
-    if (seenArtists.has(key)) continue;
-    seenArtists.add(key);
-    seeds.push(s);
-    if (seeds.length >= 3) break;
-  }
+  // Seeds come from the recommender: strongest current tastes, one per
+  // artist, with hidden and mostly-skipped tracks already filtered out.
+  const seeds = reco.pickSeeds(db.getTasteData(req.user.id), 3);
 
   const mixes = (
     await Promise.all(
@@ -395,54 +390,20 @@ app.get("/api/mixes", requireAuth, wrap(async (req, res) => {
   res.json(data);
 }));
 
-// "Quick picks": the speed-dial grid on Home. Seeded from what you play most
-// and what you liked, then filled out with each seed's automix continuation and
-// interleaved so no single artist owns the top of the grid. Falls back to
-// Trending for an account with nothing to go on yet.
+// "Quick picks": the speed-dial grid on Home, built by the YouTube-style
+// recommender (lib/reco.js): automix + co-listening + trending candidates,
+// ranked by listened-time taste, capped per artist, with discovery slots.
+// Falls back to Trending for an account with nothing to go on yet.
 const quickPickCache = new Map(); // userId -> { data, exp }
 
 app.get("/api/quickpicks", requireAuth, wrap(async (req, res) => {
   const hit = quickPickCache.get(req.user.id);
   if (hit && hit.exp > Date.now()) return res.json(hit.data);
 
-  // Favourites first, then recent plays — a seed each, one per artist.
-  const pool = [...db.topPlayed(req.user.id, 20), ...db.likedSongs(req.user.id), ...db.getHistory(req.user.id)];
-  const seeds = [];
-  const seenArtists = new Set();
-  for (const s of pool) {
-    const key = (s.artist || s.id).toLowerCase();
-    if (seenArtists.has(key)) continue;
-    seenArtists.add(key);
-    seeds.push(s);
-    if (seeds.length >= 5) break;
-  }
-
-  const lists = (await Promise.all(
-    seeds.map((seed) => ytm.getUpNext(seed.id, 12).catch(() => []))
-  )).filter((l) => l.length);
-
-  // Round-robin across the seeds so the grid reads as a mix, not five blocks.
-  const seedIds = new Set(seeds.map((s) => s.id));
-  const seen = new Set();
-  const songs = [];
-  for (let i = 0; songs.length < 24 && lists.some((l) => i < l.length); i++) {
-    for (const list of lists) {
-      const s = list[i];
-      if (!s || seen.has(s.id) || seedIds.has(s.id)) continue;
-      seen.add(s.id);
-      songs.push(s);
-      if (songs.length >= 24) break;
-    }
-  }
-
-  if (!songs.length) {
-    const { singles = [] } = await ytm.getTrending().catch(() => ({ singles: [] }));
-    const data = { songs: singles.slice(0, 24), seeded: false };
-    return res.json(data); // uncached: trending moves, and this is the cold path
-  }
-
-  const data = { songs, seeded: true };
-  quickPickCache.set(req.user.id, { data, exp: Date.now() + 3 * 60 * 60 * 1000 });
+  const data = await reco.homeFeed(req.user.id, { db, ytm });
+  // the cold path stays uncached: trending moves, and a first play should
+  // flip the feed to a personalized one on the next visit
+  if (data.seeded) quickPickCache.set(req.user.id, { data, exp: Date.now() + 3 * 60 * 60 * 1000 });
   res.json(data);
 }));
 
@@ -917,9 +878,13 @@ app.get("/api/radio/queue", requireAuth, wrap(async (req, res) => {
   res.json({ songs, next: next + 1 });
 }));
 
-// Related songs for a track ("song radio" / autoplay)
+// Related songs for a track ("song radio" / autoplay). Upstream automix
+// order is the similarity prior; the recommender nudges it by taste and
+// drops hidden or serially-skipped tracks before they ever reach a queue.
 app.get("/api/reco/:id", requireAuth, wrap(async (req, res) => {
-  res.json(await ytm.getUpNext(req.params.id));
+  const songs = await ytm.getUpNext(req.params.id);
+  const profile = reco.buildProfile(db.getTasteData(req.user.id));
+  res.json(reco.rerankUpNext(songs, profile));
 }));
 
 // ---------------------------------------------------------------------------
@@ -931,6 +896,48 @@ app.post("/api/history", requireAuth, (req, res) => {
   const song = req.body?.song;
   if (song?.id) db.addHistory(req.user.id, song);
   res.json(db.getHistory(req.user.id));
+});
+
+// Seed the recommender from a Google Takeout export. The client parses the
+// (often tens of MB) watch-history.json locally and uploads only a compact
+// aggregate — song id, title, artist, play count, last played — so no Google
+// credentials or raw export ever reach the server. Real timestamps ride
+// along so the 30-day decay sees old obsessions as old.
+app.post("/api/import/youtube", requireAuth, (req, res) => {
+  const rows = (Array.isArray(req.body?.songs) ? req.body.songs : []).slice(0, 1000);
+  const imported = db.importPlays(req.user.id, rows);
+  if (imported) {
+    // the feeds are stale the moment years of taste arrive
+    quickPickCache.delete(req.user.id);
+    mixCache.delete(req.user.id);
+  }
+  res.json({ imported });
+});
+
+// Watch-time feedback: how much of a play was actually heard. The client
+// reports it when a track stops being current; older clients that never
+// call this simply leave the counters at zero (neutral for ranking).
+app.post("/api/history/outcome", requireAuth, (req, res) => {
+  const { id, ms, dur } = req.body || {};
+  if (id) db.notePlayOutcome(req.user.id, String(id), ms, dur);
+  res.json({ ok: true });
+});
+
+// "Not interested": a hard no for the recommender, everywhere and forever
+// (until unhidden). Evicts the user's cached feeds so it takes effect now.
+app.post("/api/hidden", requireAuth, (req, res) => {
+  const song = req.body?.song;
+  if (song?.id) {
+    db.hideSong(req.user.id, song);
+    quickPickCache.delete(req.user.id);
+    mixCache.delete(req.user.id);
+  }
+  res.json({ ok: true });
+});
+
+app.delete("/api/hidden/:id", requireAuth, (req, res) => {
+  db.unhideSong(req.user.id, req.params.id);
+  res.json({ ok: true });
 });
 
 app.delete("/api/history", requireAuth, (req, res) => {

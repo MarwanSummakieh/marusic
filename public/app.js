@@ -107,12 +107,72 @@ function toast(msg, isError = false) {
   setTimeout(() => el.remove(), 2600);
 }
 
+/* ---- artwork at the size it's actually drawn ----
+   YouTube Music hands back 60×60 thumbnails. Stretched into a card they're
+   soft; stretched into the full-screen player they're mush. The size lives in
+   the URL and the masters run to ~1400px, so ask for the box we're about to
+   draw into rather than upscaling. Requests snap to a short ladder so covers
+   shared between surfaces a few pixels apart still hit the same cache entry. */
+const ART_STEPS = [60, 120, 180, 240, 320, 420, 540, 720, 960, 1200];
+const artStep = (px) => ART_STEPS.find((s) => s >= px) || ART_STEPS.at(-1);
+
+function artAt(src, px) {
+  if (!src || !px) return src;
+  const n = artStep(px);
+  // lh3/yt3.googleusercontent.com and *.ggpht.com carry "=w60-h60-l90-rj"
+  if (/(googleusercontent|ggpht)\.com\//.test(src)) return `${src.split("=")[0]}=w${n}-h${n}-l90-rj`;
+  // i.ytimg.com/vi/<id>/<name>.jpg — a fixed ladder of names, not free sizes.
+  // These are 16:9 and get cropped square, so the short edge is what counts:
+  // mqdefault 320×180, hqdefault 480×360, maxresdefault 1280×720.
+  const yt = src.match(/^(https?:\/\/i\.ytimg\.com\/vi\/[\w-]+\/)[a-z]+(\.jpg.*)$/i);
+  if (yt) return `${yt[1]}${n <= 180 ? "mqdefault" : n <= 360 ? "hqdefault" : "maxresdefault"}${yt[2]}`;
+  return src;
+}
+
+// `px` is the CSS box the cover lands in; the 2× entry covers retina. The
+// original URL rides along as a fallback for the few ytimg ids with no
+// maxres file — see the delegated error handler below.
+function artSrcAttrs(src, px) {
+  if (!px) return ` src="${esc(src)}"`;
+  const one = artAt(src, px);
+  const two = artAt(src, px * 2);
+  return ` src="${esc(one)}"${one === two ? "" : ` srcset="${esc(one)} 1x, ${esc(two)} 2x"`}` +
+    ` data-art-fb="${esc(src)}"`;
+}
+
 // `icon` lets an empty cover fall back to its content type's glyph rather than
 // a generic note, so a missing image still tells you what the thing is.
-const artImg = (src, cls = "", icon = I.note) =>
+const artImg = (src, cls = "", icon = I.note, px = 0) =>
   src
-    ? `<img class="${cls}" loading="lazy" src="${esc(src)}" alt="">`
+    ? `<img class="${cls}" loading="lazy"${artSrcAttrs(src, px)} alt="">`
     : `<div class="${cls} art-placeholder">${icon}</div>`;
+
+// Capture phase: `error` doesn't bubble, and one listener beats an inline
+// handler on every cover (script-src has no 'unsafe-inline').
+document.addEventListener("error", (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.dataset.artFb) return;
+  const original = img.dataset.artFb;
+  delete img.dataset.artFb;          // one retry, then let it fail honestly
+  img.dataset.artStep = "99999";     // and never try to upsize this one again
+  img.removeAttribute("srcset");
+  img.src = original;
+}, true);
+
+// Live elements — the mini-player cover, the full-screen art — size themselves
+// off layout instead of a guess, and re-ask when the window changes shape.
+// Only ever upward: shrinking a window shouldn't cost a second download.
+function setLiveArt(img, src, minPx = 60) {
+  if (!src) return;
+  const box = Math.max(minPx, img.clientWidth || 0, img.clientHeight || 0);
+  const want = artStep(Math.round(box * (window.devicePixelRatio || 1)));
+  if (img.dataset.artFor === src && Number(img.dataset.artStep || 0) >= want) return;
+  img.dataset.artFor = src;
+  img.dataset.artStep = String(want);
+  img.dataset.artFb = src;
+  img.removeAttribute("srcset");
+  img.src = artAt(src, want);
+}
 
 /* ---------------- api ---------------- */
 function ensureSession(res) {
@@ -155,6 +215,9 @@ const api = {
   formats: (id) => api.get(`/api/formats/${encodeURIComponent(id)}`),
   library: () => api.get("/api/library"),
   saveHistory: (song) => api.send("POST", "/api/history", { song }),
+  playOutcome: (id, ms, dur) => api.send("POST", "/api/history/outcome", { id, ms, dur }),
+  hideTrack: (song) => api.send("POST", "/api/hidden", { song }),
+  importYoutube: (songs) => api.send("POST", "/api/import/youtube", { songs }),
   toggleLike: (song) => api.send("POST", "/api/liked/toggle", { song }),
   createPlaylist: (name) => api.send("POST", "/api/playlists", { name }),
   renamePlaylist: (id, name) => api.send("PUT", `/api/playlists/${id}`, { name }),
@@ -372,14 +435,42 @@ function markTrackCurrent(i, song) {
   ].slice(0, 100);
   setMediaSession(song);
   savePlayerState(true);
-  if (!$("#lyrics-panel").classList.contains("hidden")) renderLyricsPanel();
+  if (npTabLive("lyrics")) renderLyricsPanel();
   // Prefetch more radio songs when the queue is running low
   if (state.radio && i >= state.queue.length - 3) fetchMoreRadio();
 }
 
+/* Listened-time telemetry — the signal the recommender ranks by. The highest
+   playback position reached approximates time heard (a rewind doesn't
+   double-count), and it's reported when the track stops being current: a
+   finished track flushes as a completion, a quick skip flushes as the partial
+   listen that marks it one. Only the local <audio> element is measured —
+   remote speakers report nothing, which ranking reads as neutral. */
+let listen = null; // { id, ms, dur } for the track the <audio> element played
+
+function flushListen() {
+  if (listen && listen.ms > 2000)
+    api.playOutcome(listen.id, Math.round(listen.ms), Math.round(listen.dur)).catch(() => {});
+  listen = null;
+}
+
+window.addEventListener("pagehide", () => {
+  // fetch dies with the page; sendBeacon is built to outlive it
+  if (listen && listen.ms > 2000 && navigator.sendBeacon)
+    navigator.sendBeacon(
+      "/api/history/outcome",
+      new Blob(
+        [JSON.stringify({ id: listen.id, ms: Math.round(listen.ms), dur: Math.round(listen.dur) })],
+        { type: "application/json" }
+      )
+    );
+  listen = null;
+});
+
 function loadTrack(i, autoplay) {
   const song = state.queue[i];
   if (!song) return;
+  flushListen(); // whatever was sounding stops being current here
   if (castActive() || sonosActive()) {
     // the remote device does the playing; keep the local element pointed at
     // the track but idle, so handing the audio back later is seamless
@@ -586,6 +677,10 @@ function handleTrackEnded() {
 }
 
 audio.addEventListener("ended", () => {
+  // played to the end — flush the full duration as a completion
+  if (listen && state.current && listen.id === state.current.id)
+    listen.ms = Math.max(listen.ms, (audio.duration || 0) * 1000);
+  flushListen();
   if (inJam()) {
     // The server schedules the boundary, so our stream running out is only
     // news when it happens where no boundary was scheduled (a track with no
@@ -607,6 +702,12 @@ audio.addEventListener("loadedmetadata", () => {
 audio.addEventListener("canplay", () => { state.failStreak = 0; });
 
 audio.addEventListener("timeupdate", () => {
+  if (state.current && !castActive() && !sonosActive() && audio.currentTime) {
+    if (!listen || listen.id !== state.current.id)
+      listen = { id: state.current.id, ms: 0, dur: 0 };
+    listen.ms = Math.max(listen.ms, audio.currentTime * 1000);
+    if (audio.duration) listen.dur = audio.duration * 1000;
+  }
   if (seeking) return;
   const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
   $("#progress-fill").style.width = `${pct}%`;
@@ -619,6 +720,7 @@ audio.addEventListener("timeupdate", () => {
   }
   savePlayerState();
   syncLyricsPop();
+  syncLyricsPanel();
   applyEdgeTrims();
   if (audio.currentTime > 5) prefetchNext();
 });
@@ -716,7 +818,9 @@ function updateNowPlaying() {
   if (!s) return;
   document.querySelector(".player").classList.remove("is-idle"); // leave the idle state
   const img = $("#np-image");
-  if (s.image) { img.src = s.image; img.classList.remove("hidden"); }
+  // un-hide first: a display:none image measures 0, and the art size is read
+  // off the box it actually occupies
+  if (s.image) { img.classList.remove("hidden"); setLiveArt(img, s.image); }
   else img.classList.add("hidden");
   $("#np-title").textContent = s.title;
   const npArtist = $("#np-artist");
@@ -732,7 +836,7 @@ function updateNowPlaying() {
 
   // mirror into the full-screen Now Playing sheet
   const img2 = $("#np2-image");
-  if (s.image) { img2.src = s.image; img2.classList.remove("hidden"); }
+  if (s.image) { img2.classList.remove("hidden"); setLiveArt(img2, s.image); }
   else img2.classList.add("hidden");
   $("#np2-art-placeholder").classList.toggle("hidden", !!s.image);
   $("#np2-title").textContent = s.title;
@@ -797,7 +901,9 @@ async function tintPlayerFrom(song) {
   const player = document.querySelector(".player");
   if (!song?.image) return player.style.removeProperty("--player-tint");
   const seq = ++tintSeq;
-  const rgb = await averageColor(song.image);
+  // the tint is a 16×16 average — the smallest cover on offer is plenty, and
+  // it's usually the one the mini player already has in cache
+  const rgb = await averageColor(artAt(song.image, 60));
   if (seq !== tintSeq || !rgb) return;
   player.style.setProperty("--player-tint", `${rgb[0]}, ${rgb[1]}, ${rgb[2]}`);
   applyPlayerTintState();
@@ -820,7 +926,10 @@ function setMediaSession(song) {
     title: song.title,
     artist: song.artist,
     album: song.album,
-    artwork: song.image ? [{ src: song.image, sizes: "500x500", type: "image/jpeg" }] : [],
+    // the lock screen draws this big — ask for big, and say the size honestly
+    artwork: song.image
+      ? [{ src: artAt(song.image, 512), sizes: "512x512", type: "image/jpeg" }]
+      : [],
   });
   navigator.mediaSession.setActionHandler("play", () => {
     if (inJam() || castActive() || sonosActive()) return $("#btn-play").click();
@@ -988,9 +1097,8 @@ const npSheetLabel = () =>
     ? `${state.radio.name} Radio`
     : "Now playing";
 
-function openNpSheet() {
+function openNpSheet(tab) {
   if (!state.current) return;
-  updateNowPlaying(); // refresh the mirrored fields before revealing
   const dur = seekDuration();
   const pct = dur ? (playerTime() / dur) * 100 : 0;
   $("#np2-progress-fill").style.width = `${pct}%`;
@@ -998,12 +1106,72 @@ function openNpSheet() {
   $("#np2-time-cur").textContent = fmtTime(playerTime());
   $("#np-sheet-label").textContent = npSheetLabel();
   npSheet.classList.add("open");
+  // after the class lands: the art measures 0 while the sheet is display-less,
+  // and the cover's size is read off the box it actually gets
+  updateNowPlaying();
+  if (!isPhone()) setNpTab(tab || npTab);
 }
 
 const closeNpSheet = () => {
   npSheet.classList.remove("open");
   closeDrawer(); // the drawer lives inside the sheet — never leave it hanging
 };
+
+/* ---- the side column: lyrics / queue / jam as tabs of one player ----
+   These were three fixed panels that slid over the page from the right. One
+   at a time, each on top of the cover, each with its own close button. Now
+   they're tabs, always in view beside the art, and the panes stay in the DOM
+   so the drag-to-reorder and seek-by-lyric handlers below stay bound. */
+const NP_TABS = ["lyrics", "queue", "jam"];
+let npTab = NP_TABS.includes(localStorage.getItem("npTab")) ? localStorage.getItem("npTab") : "queue";
+
+const npSheetOpen = () => npSheet.classList.contains("open");
+// "is this surface live?" — what the render functions check before painting
+const npTabLive = (tab) => npSheetOpen() && !isPhone() && npTab === tab;
+
+function setNpTab(tab) {
+  npTab = NP_TABS.includes(tab) ? tab : "queue";
+  try { localStorage.setItem("npTab", npTab); } catch {}
+  NP_TABS.forEach((t) => {
+    $(`#np2-pane-${t}`).hidden = t !== npTab;
+    const btn = $(`.np2-tab[data-nptab="${t}"]`);
+    btn.classList.toggle("on", t === npTab);
+    btn.setAttribute("aria-selected", String(t === npTab));
+  });
+  paintNpTab();
+}
+
+function paintNpTab() {
+  if (npTab === "queue") renderQueuePanel();
+  else if (npTab === "lyrics") renderLyricsPanel();
+  else renderJamPane();
+}
+
+$("#np2-side").addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-nptab]");
+  if (tab) setNpTab(tab.dataset.nptab);
+});
+
+// Crossing the phone/desktop line with the player open swaps which of the two
+// surfaces is in charge, so hand over rather than leaving both half-armed.
+matchMedia("(max-width: 640px)").addEventListener("change", () => {
+  if (!npSheetOpen()) return;
+  closeDrawer();
+  if (!isPhone()) setNpTab(npTab);
+});
+
+// The jam tab wears a dot while a session is on, so you can tell from the
+// lyrics that people are still listening with you.
+function markJamTab() {
+  $(`.np2-tab[data-nptab="jam"]`).classList.toggle("live", inJam());
+}
+
+/* The cover asks for the resolution it's drawn at, so a reshaped window (or a
+   window dragged to a second screen with a different pixel ratio) re-asks. */
+new ResizeObserver(() => {
+  if (state.current?.image && !$("#np2-image").classList.contains("hidden"))
+    setLiveArt($("#np2-image"), state.current.image);
+}).observe($("#np2-art"));
 
 /* ---- press and hold the mini player (phones) ----
    A long press gets you like / save / device / hide without the full sheet
@@ -1027,7 +1195,7 @@ function openHoldSheet() {
   const saved = savedIds().has(s.id);
   $("#hold-card").innerHTML = `
     <div class="hold-track">
-      ${artImg(s.image, "hold-art")}
+      ${artImg(s.image, "hold-art", I.note, 52)}
       <div class="hold-text">
         <div class="hold-title">${esc(s.title)}</div>
         <div class="hold-artist">${esc(s.artist)}</div>
@@ -1068,12 +1236,15 @@ holdSheet.addEventListener("click", async (e) => {
     const i = state.queue.findIndex((q) => q.id === s.id);
     if (i >= 0) state.queue.splice(i, 1);
     hiddenTracks.add(s.id);
-    toast(`Hidden — “${s.title}” won't come back in this queue`);
+    api.hideTrack(s).catch(() => {}); // "not interested" — the recommender stops suggesting it
+    toast(`Hidden — “${s.title}” won't be recommended again`);
     next();
   }
 });
 
 // Tracks the listener explicitly hid; autoplay and radio both skip them.
+// Seeded from the server at boot (the recommender stores hides), so a track
+// hidden on the phone stays hidden on the desktop too.
 const hiddenTracks = new Set();
 
 {
@@ -1119,9 +1290,9 @@ $("#np2-download").addEventListener("click", (e) => {
   e.stopPropagation();
   if (state.current) downloadOrPick(e, state.current);
 });
-/* ---- sheet drawer ----
-   Queue and lyrics slide up from the bottom of the sheet instead of throwing
-   you into a side panel, so both land under your thumb. */
+/* ---- sheet drawer (phones) ----
+   The phone equivalent of the side column: queue and lyrics slide up from the
+   bottom of the sheet, so both land under your thumb. */
 const npDrawer = $("#np2-drawer");
 let drawerMode = "";
 
@@ -1147,13 +1318,13 @@ function closeDrawer() {
 async function paintDrawer() {
   const body = $("#np2-drawer-body");
   if (drawerMode === "queue") {
-    // the same queue the side panel draws, sections and all — on a phone this
-    // *is* the queue, and in a session it has to be the shared one
+    // the same queue the player's queue tab draws, sections and all — on a
+    // phone this *is* the queue, and in a session it has to be the shared one
     const v = queueView();
     const row = (i) => {
       const s = v.songs[i];
       return `<div class="dq-item" data-dq="${i}">
-        ${artImg(s.image, "dq-art")}
+        ${artImg(s.image, "dq-art", I.note, 44)}
         <span class="dq-meta"><b>${esc(s.title)}</b><span>${esc(s.artist)}</span></span>
       </div>`;
     };
@@ -1180,8 +1351,10 @@ async function paintDrawer() {
   }
 }
 
-$("#np2-lyrics").addEventListener("click", () => openDrawer("lyrics"));
-$("#np2-queue").addEventListener("click", () => openDrawer("queue"));
+// On desktop these three are the side column's tabs (hidden by CSS there);
+// on phones they open the drawer below the transport.
+$("#np2-lyrics").addEventListener("click", () => isPhone() ? openDrawer("lyrics") : setNpTab("lyrics"));
+$("#np2-queue").addEventListener("click", () => isPhone() ? openDrawer("queue") : setNpTab("queue"));
 $("#np2-drawer-close").addEventListener("click", closeDrawer);
 npDrawer.addEventListener("click", (e) => {
   const item = e.target.closest("[data-dq]");
@@ -1251,23 +1424,37 @@ for (const zone of ["#np-sheet-head", "#np2-art"]) {
   });
 }
 
-/* volume */
+/* volume ----
+   Two sliders draw the same number: the transport bar's, and the one in the
+   full-screen player (which covers the bar). They go through these two
+   setters so they can never disagree about how loud things are. */
 const volumeEl = $("#volume");
+
+const setVolumeSliders = (v) => {
+  for (const el of [volumeEl, $("#np2-volume")]) {
+    el.value = v;
+    el.style.setProperty("--vol", `${v}%`);
+  }
+};
+
+function setMuteGlyph(icon) {
+  $("#btn-mute").innerHTML = icon;
+  $("#np2-mute").innerHTML = icon;
+}
 
 function applyVolume(v) {
   baseVolume = (v / 100) ** 2; // perceptual curve
   audio.volume = baseVolume;   // the crossfade rides on top of this
-  volumeEl.value = v;
-  volumeEl.style.setProperty("--vol", `${v}%`);
-  $("#btn-mute").innerHTML = audio.muted || v === 0 ? I.mute : I.volume;
+  setVolumeSliders(v);
+  setMuteGlyph(audio.muted || v === 0 ? I.mute : I.volume);
 }
 
 volumeEl.addEventListener("input", () => {
   const v = Number(volumeEl.value);
   if (castActive() || sonosActive()) {
     // the slider drives the remote device; the local preference stays untouched
-    volumeEl.style.setProperty("--vol", `${v}%`);
-    $("#btn-mute").innerHTML = v === 0 ? I.mute : I.volume;
+    setVolumeSliders(v);
+    setMuteGlyph(v === 0 ? I.mute : I.volume);
     if (castActive()) {
       castPlayer.volumeLevel = v / 100;
       castCtl.setVolumeLevel();
@@ -1285,7 +1472,15 @@ $("#btn-mute").addEventListener("click", () => {
   if (castActive()) return castCtl.muteOrUnmute();
   if (sonosActive()) return sonosToggleMute();
   audio.muted = !audio.muted;
-  $("#btn-mute").innerHTML = audio.muted ? I.mute : I.volume;
+  setMuteGlyph(audio.muted ? I.mute : I.volume);
+});
+
+/* the full-screen player's pair reuse the bar's handlers, the way its
+   transport buttons already do, so the behaviour can't drift */
+$("#np2-mute").addEventListener("click", () => $("#btn-mute").click());
+$("#np2-volume").addEventListener("input", (e) => {
+  volumeEl.value = e.target.value;
+  volumeEl.dispatchEvent(new Event("input"));
 });
 
 /* Streaming quality is a set-once preference, so it lives in Profile ›
@@ -1300,18 +1495,18 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-/* ---------------- queue panel ---------------- */
-$("#btn-queue").addEventListener("click", () => {
-  $("#lyrics-panel").classList.add("hidden");
-  $("#queue-panel").classList.toggle("hidden");
-  renderQueuePanel();
-});
+/* ---------------- transport → the player's side tabs ----------------
+   Both buttons open the full-screen player on the tab you asked for, and
+   pressing the one you're already on closes it again. */
+function toggleNpTab(tab) {
+  if (!state.current) return toast("Play something first");
+  if (npSheetOpen() && npTab === tab) return closeNpSheet();
+  openNpSheet(tab);
+}
 
-$("#btn-queue-close").addEventListener("click", () =>
-  $("#queue-panel").classList.add("hidden")
-);
+$("#btn-queue").addEventListener("click", () => toggleNpTab("queue"));
 
-/* autoplay toggle (queue panel header) — in a jam it mirrors the jam setting */
+/* autoplay toggle (queue tab) — in a jam it mirrors the jam setting */
 function applyAutoplayUI() {
   $("#btn-autoplay").classList.toggle(
     "on",
@@ -1331,17 +1526,12 @@ $("#btn-autoplay").addEventListener("click", () => {
 });
 
 /* ---------------- lyrics ----------------
-   Desktop gets a light pop-up rather than a side panel that shoves the page
-   over; the side panel is still there for anyone who prefers it (shift-click). */
+   The lyrics tab of the player is the main event. The small floating pop-up
+   is still around for reading along over a page you're browsing — shift-click
+   (it's the one thing here that doesn't cover the app). */
 $("#btn-lyrics").addEventListener("click", (e) => {
-  if (e.shiftKey || isPhone()) {
-    $("#queue-panel").classList.add("hidden");
-    const panel = $("#lyrics-panel");
-    panel.classList.toggle("hidden");
-    if (!panel.classList.contains("hidden")) renderLyricsPanel();
-    return;
-  }
-  openLyricsPop();
+  if (e.shiftKey) return openLyricsPop();
+  toggleNpTab("lyrics");
 });
 
 /* ---- lyrics pop-up ---- */
@@ -1377,6 +1567,59 @@ function parseLyrics(text, duration) {
   });
 }
 
+/* One fetch and one parse per track, shared by the pop-up and the player's
+   lyrics tab — opening both used to mean asking the server twice. */
+const lyricsCache = new Map();   // id -> { lines, source, raw }
+
+async function getLyrics(song) {
+  if (lyricsCache.has(song.id)) return lyricsCache.get(song.id);
+  const { lyrics, source } = await api.lyrics(song.id);
+  const entry = {
+    raw: lyrics || "",
+    source: source || "",
+    lines: lyrics ? parseLyrics(lyrics, song.duration || audio.duration || 0) : [],
+  };
+  // a long night's listening shouldn't quietly hold every lyric sheet it saw
+  if (lyricsCache.size >= 60) lyricsCache.delete(lyricsCache.keys().next().value);
+  lyricsCache.set(song.id, entry);
+  return entry;
+}
+
+const lyricLinesHTML = (lines) => lines
+  .map((l, i) => l.text
+    ? `<p class="lp-line" data-lp="${i}"${l.t != null ? ` data-t="${l.t}"` : ""}>${esc(l.text)}</p>`
+    : `<p class="lp-gap"></p>`)
+  .join("");
+
+// Highlight-and-scroll runs off the same tick the progress bar already uses.
+// `at` is the caller's last-highlighted index; the new one comes back so the
+// two surfaces can each keep their own place in the same lines.
+function followLyrics(body, lines, at) {
+  if (!lines.length) return at;
+  const t = playerTime();
+  let idx = -1;
+  for (let i = 0; i < lines.length; i++) if (lines[i].t != null && lines[i].t <= t) idx = i;
+  if (idx === at) return at;
+  body.querySelectorAll(".lp-line.on").forEach((el) => el.classList.remove("on"));
+  const el = body.querySelector(`[data-lp="${idx}"]`);
+  if (el) {
+    el.classList.add("on");
+    body.scrollTo({ top: el.offsetTop - body.clientHeight / 2 + el.clientHeight, behavior: "smooth" });
+  }
+  return idx;
+}
+
+// Clicking a timed line seeks to it — the lyrics double as a scrub track.
+function seekToLyric(e) {
+  const line = e.target.closest("[data-t]");
+  if (!line) return;
+  const t = Number(line.dataset.t);
+  if (inJam()) return jamControl(api.jamSeek, t);
+  if (castActive()) return castSeek(t);
+  if (sonosActive()) return sonosSeek(t);
+  audio.currentTime = t;
+}
+
 async function openLyricsPop() {
   const song = state.current;
   if (!song) return toast("Play something first");
@@ -1390,17 +1633,16 @@ async function openLyricsPop() {
   $("#lp-body").innerHTML = `<div class="spinner"></div>`;
   $("#lp-note").textContent = "";
   try {
-    const { lyrics, source } = await api.lyrics(song.id);
+    const { lines, source, raw } = await getLyrics(song);
     if (popFor !== song.id) return;
-    popRaw = lyrics || "";
-    if (!popRaw) {
+    popRaw = raw;
+    popLines = lines;
+    if (!lines.length) {
       $("#lp-body").innerHTML = `<div class="queue-empty">No lyrics published for this track.</div>`;
-      popLines = [];
       return;
     }
-    popLines = parseLyrics(popRaw, song.duration || audio.duration || 0);
     paintLyricsPop();
-    $("#lp-note").textContent = source || "";
+    $("#lp-note").textContent = source;
   } catch {
     if (popFor === song.id)
       $("#lp-body").innerHTML = `<div class="queue-empty">Couldn't load lyrics.</div>`;
@@ -1408,42 +1650,24 @@ async function openLyricsPop() {
 }
 
 function paintLyricsPop() {
-  $("#lp-body").innerHTML = popLines
-    .map((l, i) => l.text
-      ? `<p class="lp-line" data-lp="${i}"${l.t != null ? ` data-t="${l.t}"` : ""}>${esc(l.text)}</p>`
-      : `<p class="lp-gap"></p>`)
-    .join("");
+  $("#lp-body").innerHTML = lyricLinesHTML(popLines);
   popActive = -1;
 }
 
 function applyLyricsSize() {
   $("#lp-body").style.fontSize = `${prefs.lyricsSize}px`;
+  $("#lyrics-body").style.fontSize = `${prefs.lyricsSize}px`;
 }
 
-// Highlight-and-scroll runs off the same tick the progress bar already uses.
 function syncLyricsPop() {
-  if (!lyricsPop.open || !$("#lp-follow").checked || !popLines.length) return;
-  const t = playerTime();
-  let idx = -1;
-  for (let i = 0; i < popLines.length; i++) {
-    if (popLines[i].t != null && popLines[i].t <= t) idx = i;
-  }
-  if (idx === popActive) return;
-  popActive = idx;
-  const body = $("#lp-body");
-  body.querySelectorAll(".lp-line.on").forEach((el) => el.classList.remove("on"));
-  const el = body.querySelector(`[data-lp="${idx}"]`);
-  if (!el) return;
-  el.classList.add("on");
-  body.scrollTo({ top: el.offsetTop - body.clientHeight / 2 + el.clientHeight, behavior: "smooth" });
+  if (!lyricsPop.open || !$("#lp-follow").checked) return;
+  popActive = followLyrics($("#lp-body"), popLines, popActive);
 }
 
 $("#lp-close").addEventListener("click", () => lyricsPop.close());
 $("#lp-page").addEventListener("click", () => {
   lyricsPop.close();
-  $("#queue-panel").classList.add("hidden");
-  $("#lyrics-panel").classList.remove("hidden");
-  renderLyricsPanel();
+  openNpSheet("lyrics");
 });
 $("#lp-bigger").addEventListener("click", () => {
   setPref("lyricsSize", Math.min(34, prefs.lyricsSize + 2));
@@ -1467,46 +1691,63 @@ $("#lp-translate").addEventListener("click", () => {
   $("#lp-translate").classList.toggle("on", popTranslated);
 });
 
-// Clicking a timed line seeks to it — the lyrics double as a scrub track.
-$("#lp-body").addEventListener("click", (e) => {
-  const line = e.target.closest("[data-t]");
-  if (!line) return;
-  const t = Number(line.dataset.t);
-  if (inJam()) return jamControl(api.jamSeek, t);
-  if (castActive()) return castSeek(t);
-  if (sonosActive()) return sonosSeek(t);
-  audio.currentTime = t;
-});
+$("#lp-body").addEventListener("click", seekToLyric);
 
-$("#btn-lyrics-close").addEventListener("click", () =>
-  $("#lyrics-panel").classList.add("hidden")
-);
-
+/* ---- the player's lyrics tab ----
+   Same lines as the pop-up, and time-synced the same way: the tab is wide
+   enough to read from across the room, so it gets the highlight too. */
 let lyricsFor = "";
+let lyricsActive = -1;
+
 async function renderLyricsPanel() {
   const body = $("#lyrics-body");
   const song = state.current;
   if (!song) {
+    lyricsFor = "";
+    $("#lyrics-source").textContent = "";
     body.innerHTML = `<div class="queue-empty">Play something to see its lyrics.</div>`;
     return;
   }
-  if (lyricsFor === song.id && body.dataset.loaded === song.id) return;
+  if (lyricsFor === song.id) return;   // already showing this track's lines
   lyricsFor = song.id;
+  lyricsActive = -1;
+  applyLyricsSize();
+  $("#lyrics-source").textContent = "";
   body.innerHTML = `<div class="spinner"></div>`;
   try {
-    const { lyrics, source } = await api.lyrics(song.id);
+    const { lines, source } = await getLyrics(song);
     if (lyricsFor !== song.id) return; // track changed while loading
-    body.dataset.loaded = song.id;
-    body.innerHTML = lyrics
-      ? `<div class="lyrics-title">${esc(song.title)} · ${esc(song.artist)}</div>
-         <div class="lyrics-text">${esc(lyrics)}</div>
-         ${source ? `<div class="lyrics-source">${esc(source)}</div>` : ""}`
+    $("#lyrics-source").textContent = source;
+    body.innerHTML = lines.length
+      ? lyricLinesHTML(lines)
       : `<div class="queue-empty">No lyrics available for<br><b>${esc(song.title)}</b></div>`;
   } catch {
-    if (lyricsFor === song.id)
+    if (lyricsFor === song.id) {
+      lyricsFor = "";                  // a failure shouldn't be cached as "done"
       body.innerHTML = `<div class="queue-empty">Couldn't load lyrics.</div>`;
+    }
   }
 }
+
+function syncLyricsPanel() {
+  if (!npTabLive("lyrics") || !$("#lyrics-follow").checked) return;
+  // `lyricsFor` is what's actually on screen — during the moment between a
+  // track change and its lines landing, that isn't state.current yet
+  if (!state.current || lyricsFor !== state.current.id) return;
+  const entry = lyricsCache.get(state.current.id);
+  if (!entry?.lines.length) return;
+  lyricsActive = followLyrics($("#lyrics-body"), entry.lines, lyricsActive);
+}
+
+$("#lyrics-body").addEventListener("click", seekToLyric);
+$("#lyrics-bigger").addEventListener("click", () => {
+  setPref("lyricsSize", Math.min(34, prefs.lyricsSize + 2));
+  applyLyricsSize();
+});
+$("#lyrics-smaller").addEventListener("click", () => {
+  setPref("lyricsSize", Math.max(12, prefs.lyricsSize - 2));
+  applyLyricsSize();
+});
 
 function upcomingIndices() {
   if (state.order) return state.order.slice(state.pos + 1);
@@ -1547,11 +1788,10 @@ function queueView() {
 }
 
 function renderQueuePanel() {
-  // On a phone the drawer *is* the queue and the side panel stays shut, so it
-  // repaints before the panel gets to bow out.
+  // On a phone the drawer *is* the queue and the side column stays folded, so
+  // it repaints before the tab gets to bow out.
   if (drawerMode === "queue") paintDrawer();
-  const panel = $("#queue-panel");
-  if (panel.classList.contains("hidden")) return;
+  if (!npTabLive("queue")) return;
   const list = $("#queue-list");
   $("#queue-title").textContent = inJam() ? jamCopy(jamMode()).title : "Queue";
   if (inJam()) return renderJamQueue(list);
@@ -1567,7 +1807,7 @@ function renderQueuePanel() {
     const flags = queueFlags.get(s.id) || {};
     return `<div class="queue-item ${playing ? "playing" : ""}" data-qi="${i}" draggable="true">
       <span class="qi-grip" title="Drag to reorder">${I.drag}</span>
-      ${artImg(s.image)}
+      ${artImg(s.image, "", I.note, 40)}
       <div class="qi-meta">
         <div class="qi-title">${esc(s.title)}</div>
         <div class="qi-artist">${esc(s.artist)}</div>
@@ -1716,7 +1956,7 @@ function renderJamQueue(list) {
   const item = (i, playing) => {
     const s = j.queue[i];
     return `<div class="queue-item ${playing ? "playing" : ""}" data-jqi="${i}">
-      ${artImg(s.image)}
+      ${artImg(s.image, "", I.note, 40)}
       <div class="qi-meta">
         <div class="qi-title">${esc(s.title)}</div>
         <div class="qi-artist">${esc(s.artist)}</div>
@@ -2051,7 +2291,7 @@ function jamApplyPlayback(opts = {}) {
         ...state.library.history.filter((s) => s.id !== song.id),
       ].slice(0, 100);
     }
-    if (!$("#lyrics-panel").classList.contains("hidden")) renderLyricsPanel();
+    if (npTabLive("lyrics")) renderLyricsPanel();
   }
   if (!plays) {
     // this device is a remote control: it shows the jam, the speaker sounds it
@@ -2302,6 +2542,8 @@ function jamOpenEvents() {
 /* topbar chip: always-visible way back to the session while it's on */
 function renderJamChip() {
   const chip = $("#jam-chip");
+  markJamTab();
+  if (npTabLive("jam")) renderJamPane();
   if (!inJam()) return chip.classList.add("hidden");
   const c = jamCopy(jamMode());
   chip.classList.remove("hidden");
@@ -2310,7 +2552,140 @@ function renderJamChip() {
   chip.innerHTML = `${c.icon()}<span class="jam-chip-code">${esc(state.jam.code)}</span><span class="jam-chip-count">${state.jam.members.length}</span>`;
 }
 
+/* ---- the player's jam tab ----
+   Who's listening and what they can do, beside the cover instead of a page
+   away. The full Jam page is still there for starting one from scratch and
+   for everything that doesn't fit in a column this wide. */
+function renderJamPane() {
+  const body = $("#jam-body");
+  if (!inJam()) {
+    const c = jamCopy(prefs.jamMode === "together" ? "together" : "speaker");
+    body.innerHTML = `
+      <div class="jam-pane-empty">
+        <div class="jam-hero-icon">${c.icon()}</div>
+        <h3>Listen with friends</h3>
+        <p class="jam-sub">${c.blurb}</p>
+        <button class="btn-solid" id="jam-pane-start">${state.current ? c.startFrom : c.start}</button>
+        <div class="jam-join-row">
+          <input id="jam-pane-code" maxlength="6" placeholder="Have a code?" autocomplete="off" spellcheck="false">
+          <button class="btn-ghost" id="jam-pane-join">Join</button>
+        </div>
+        <a class="jam-pane-link" href="#/jam">Open the full Jam page</a>
+      </div>`;
+
+    $("#jam-pane-start").onclick = async () => {
+      const mode = prefs.jamMode === "together" ? "together" : "speaker";
+      try {
+        const seed = state.current
+          ? { queue: state.queue.slice(0, 500), index: state.qIndex, pos: audio.currentTime || 0, playing: !audio.paused }
+          : {};
+        enterJam(await api.jamCreate(seed, mode), { quiet: true });
+        renderJamPane();
+        toast(jamCopy(mode).started);
+      } catch (err) { toast(err.message, true); }
+    };
+    const join = async () => {
+      const typed = $("#jam-pane-code").value.trim();
+      if (!typed) return;
+      try {
+        enterJam(await api.jamJoin(typed));   // the code picks the kind, not us
+        renderJamPane();
+      } catch (err) { toast(err.message, true); }
+    };
+    $("#jam-pane-join").onclick = join;
+    $("#jam-pane-code").addEventListener("keydown", (e) => { if (e.key === "Enter") join(); });
+    return;
+  }
+
+  const j = state.jam;
+  const host = jamIsHost();
+  const c = jamCopy(jamMode());
+  const listening = j.members.filter((m) => m.connected).length;
+  body.innerHTML = `
+    <div class="jam-pane">
+      <div class="jam-pane-code">
+        <span class="jam-code-label">${c.title} · join code</span>
+        <span class="jam-code">${esc(j.code)}</span>
+        <span class="jam-pane-copy">
+          <button class="btn-solid" id="jam-pane-link">Copy invite link</button>
+          <button class="btn-ghost" id="jam-pane-copy">Copy code</button>
+        </span>
+      </div>
+
+      <div class="jam-speaker-row${isTogether() || isJamSpeaker() || j.speakerOnline ? "" : " warn"}">
+        <span class="jam-speaker-icon">${I.volume}</span>
+        <span class="jam-speaker-text">${
+          isTogether()
+            ? `Playing on <b>every device</b> — ${listening} ${listening === 1 ? "person is" : "people are"} hearing this in sync`
+            : isJamSpeaker()
+            ? "The audio plays on <b>this device</b> — everyone else is a remote"
+            : j.speakerOnline
+            ? "The audio plays on the host's device; this one is a remote control"
+            : "No device is playing the audio right now"
+        }</span>
+        ${host && !isTogether() && !isJamSpeaker() ? `<button class="btn-solid" id="jam-pane-claim">Play here</button>` : ""}
+      </div>
+
+      <div class="queue-section">${j.members.length} ${isTogether() ? "listening together" : "in the jam"}</div>
+      <div class="jam-members">
+        ${j.members.map((m) => `
+          <div class="jam-member${m.connected ? "" : " offline"}">
+            <span class="user-avatar">${esc((m.name || "?")[0].toUpperCase())}</span>
+            <span class="jam-member-name">${esc(m.name)}${m.id === j.youId ? " (you)" : ""}</span>
+            ${m.host ? `<span class="badge badge-green">host</span>` : ""}
+            ${m.connected ? "" : `<span class="badge">away</span>`}
+            ${host && !m.host ? `<button class="btn-ghost danger-text" data-kick="${m.id}">Remove</button>` : ""}
+          </div>`).join("")}
+      </div>
+
+      ${host ? `
+      <div class="queue-section">Host settings</div>
+      <label class="jam-setting">
+        <input type="checkbox" id="jam-pane-control" ${j.settings.guestsControl ? "checked" : ""}>
+        <span>Everyone can control playback
+          <span class="jam-sub">Off — only you can play, pause, skip and seek. Anyone can still add songs.</span></span>
+      </label>` : ""}
+
+      <div class="jam-leave-row">
+        ${host ? `<button class="btn-ghost danger-text" id="jam-pane-end">End for everyone</button>` : ""}
+        <button class="btn-ghost" id="jam-pane-leave">Leave</button>
+      </div>
+      <a class="jam-pane-link" href="${jamRoute(jamMode())}/${esc(j.code)}">Open the full Jam page</a>
+    </div>`;
+
+  const copy = async (text, okMsg) => {
+    try { await navigator.clipboard.writeText(text); toast(okMsg); }
+    catch { modalPrompt("Copy this", "", text); }
+  };
+  $("#jam-pane-link").onclick = () =>
+    copy(`${location.origin}/${jamRoute(jamMode())}/${j.code}`, "Invite link copied");
+  $("#jam-pane-copy").onclick = () => copy(j.code, "Code copied");
+  const claim = $("#jam-pane-claim");
+  if (claim) claim.onclick = () =>
+    api.jamSpeaker().then(() => toast("This device is the speaker now"))
+      .catch((err) => toast(err.message, true));
+  body.querySelectorAll("[data-kick]").forEach((b) =>
+    (b.onclick = () => api.jamKick(Number(b.dataset.kick)).catch((err) => toast(err.message, true))));
+  const ctl = $("#jam-pane-control");
+  if (ctl) ctl.onchange = () =>
+    api.jamSettings({ guestsControl: ctl.checked }).catch((err) => toast(err.message, true));
+  const end = $("#jam-pane-end");
+  if (end) end.onclick = async () => {
+    const noun = jamNoun();
+    try { await api.jamEnd(); exitJamMode(`Ended the ${noun}`); }
+    catch (err) { toast(err.message, true); }
+  };
+  $("#jam-pane-leave").onclick = async () => {
+    const noun = jamNoun();
+    try { await api.jamLeave(); exitJamMode(`Left the ${noun}`); }
+    catch (err) { toast(err.message, true); }
+  };
+}
+
+// Phones have no room for a side column, so this still hands you the full
+// Jam page. On desktop the jam is a tab right here.
 $("#np2-jam").addEventListener("click", () => {
+  if (!isPhone()) return setNpTab("jam");
   closeNpSheet();
   location.hash = inJam() ? jamRoute(jamMode()) : "#/jam";
 });
@@ -2489,9 +2864,8 @@ function updateCastUI() {
 function castSyncVolume() {
   if (!castOn) return;
   const v = Math.round((castPlayer.volumeLevel ?? 1) * 100);
-  volumeEl.value = v;
-  volumeEl.style.setProperty("--vol", `${v}%`);
-  $("#btn-mute").innerHTML = castPlayer.isMuted || v === 0 ? I.mute : I.volume;
+  setVolumeSliders(v);
+  setMuteGlyph(castPlayer.isMuted || v === 0 ? I.mute : I.volume);
 }
 
 // the cast counterpart of the <audio> timeupdate handler
@@ -2862,9 +3236,8 @@ function sonosSetVolume(v) {
 
 function sonosReflectVolume(v) {
   if (sonosVolTimer) return; // the user is dragging — don't fight them
-  volumeEl.value = v;
-  volumeEl.style.setProperty("--vol", `${v}%`);
-  $("#btn-mute").innerHTML = v === 0 ? I.mute : I.volume;
+  setVolumeSliders(v);
+  setMuteGlyph(v === 0 ? I.mute : I.volume);
 }
 
 function sonosToggleMute() {
@@ -3395,9 +3768,9 @@ function renderSidebar() {
       const imgs = p.songs.slice(0, 4).map((s) => s.image).filter(Boolean);
       let cover;
       if (imgs.length >= 4) {
-        cover = `<span class="lib-cover-collage">${imgs.map((u) => `<img src="${esc(u)}">`).join("")}</span>`;
+        cover = `<span class="lib-cover-collage">${imgs.map((u) => `<img${artSrcAttrs(u, 24)}>`).join("")}</span>`;
       } else if (imgs.length) {
-        cover = `<img class="lib-cover" src="${esc(imgs[0])}">`;
+        cover = `<img class="lib-cover"${artSrcAttrs(imgs[0], 48)}>`;
       } else {
         cover = `<span class="lib-cover-empty">${I.note}</span>`;
       }
@@ -3414,7 +3787,7 @@ function renderSidebar() {
     ? `<div class="lib-section nav-label">Albums</div>` +
       state.library.albums.map((a) => `
         <a class="lib-item" href="#/album/${encodeURIComponent(a.token)}">
-          ${a.image ? `<img class="lib-cover" loading="lazy" src="${esc(a.image)}">` : `<span class="lib-cover-empty">${I.note}</span>`}
+          ${a.image ? `<img class="lib-cover" loading="lazy"${artSrcAttrs(a.image, 48)}>` : `<span class="lib-cover-empty">${I.note}</span>`}
           <span class="lib-meta nav-label">
             <span class="lib-name">${esc(a.title)}</span>
             <span class="lib-sub">Album · ${esc(a.artist)}</span>
@@ -3425,7 +3798,7 @@ function renderSidebar() {
     ? `<div class="lib-section nav-label">Artists</div>` +
       state.library.artists.map((a) => `
         <a class="lib-item" href="#/artist/${encodeURIComponent(a.id)}">
-          ${a.image ? `<img class="lib-cover round" loading="lazy" src="${esc(a.image)}">` : `<span class="lib-cover-empty round">${I.person}</span>`}
+          ${a.image ? `<img class="lib-cover round" loading="lazy"${artSrcAttrs(a.image, 48)}>` : `<span class="lib-cover-empty round">${I.person}</span>`}
           <span class="lib-meta nav-label">
             <span class="lib-name">${esc(a.name)}</span>
             <span class="lib-sub">Artist</span>
@@ -3517,14 +3890,14 @@ const TYPE_LEGEND = `
 const mosaicHTML = (imgs) =>
   `<div class="art-mosaic">${imgs
     .slice(0, 4)
-    .map((src) => `<img loading="lazy" src="${esc(src)}" alt="">`)
+    .map((src) => `<img loading="lazy"${artSrcAttrs(src, 120)} alt="">`)
     .join("")}</div>`;
 
 const CARD = (o) => {
   const t = TYPES[o.type];
   const cover = o.mosaic?.length >= 4
     ? mosaicHTML(o.mosaic)
-    : artImg(o.image, "", t ? I[t.icon] : I.note);
+    : artImg(o.image, "", t ? I[t.icon] : I.note, 220);
   return `
   <div class="card" data-card="${o.kind}"${o.type ? ` data-type="${o.type}"` : ""} ${o.attrs || ""}>
     <div class="card-art${o.round ? " round" : ""}"${o.color ? ` style="--card-tint:${esc(o.color)}"` : ""}>
@@ -3564,7 +3937,7 @@ function trackListHTML(songs, opts = {}) {
           <span class="num">${i + 1}</span><button class="row-play">${I.play}</button>
         </div>
         <div class="t-main">
-          ${artImg(s.image)}
+          ${artImg(s.image, "", I.note, 42)}
           <div class="t-text">
             <div class="t-title">${esc(s.title)}</div>
             ${artistLine(s)}
@@ -3829,7 +4202,7 @@ function renderHome() {
     ...playlists.slice(0, 5).map((p) => {
       const img = p.songs[0]?.image;
       return `<div class="shortcut" data-card="playlist" data-id="${p.id}">
-        ${img ? `<img src="${esc(img)}">` : `<span class="liked-cover" style="background:linear-gradient(135deg,#27856a,#1e3264)">${I.note}</span>`}
+        ${img ? `<img${artSrcAttrs(img, 64)}>` : `<span class="liked-cover" style="background:linear-gradient(135deg,#27856a,#1e3264)">${I.note}</span>`}
         <span class="sc-name">${esc(p.name)}</span></div>`;
     }),
   ].join("");
@@ -4001,7 +4374,7 @@ const trendingPlaylistCard = (singles) =>
    inside. */
 const quickPickHTML = (s, i) => `
   <div class="qp" data-card="quickpick" data-idx="${i}">
-    ${artImg(s.image, "qp-art")}
+    ${artImg(s.image, "qp-art", I.note, 48)}
     <div class="qp-text">
       <div class="qp-title">${esc(s.title)}</div>
       <div class="qp-sub">${esc(s.artist)}</div>
@@ -4197,14 +4570,14 @@ function topResult(q, { songs, artists }) {
 const topResultHTML = (top) =>
   top.kind === "artist"
     ? `<div class="top-result" data-card="artist" data-id="${esc(top.item.id)}">
-         ${artImg(top.item.image, "round")}
+         ${artImg(top.item.image, "round", I.person, 92)}
          <div>
            <div class="tr-title">${esc(top.item.name)}</div>
            <div class="tr-sub">Artist</div>
          </div>
        </div>`
     : `<div class="top-result" data-card="song" data-idx="0">
-         ${artImg(top.item.image)}
+         ${artImg(top.item.image, "", I.note, 92)}
          <div>
            <div class="tr-title">${esc(top.item.title)}</div>
            <div class="tr-sub">Song · <b>${esc(top.item.artist)}</b></div>
@@ -4508,7 +4881,7 @@ async function renderAlbum(token) {
     view.innerHTML = `
       <div class="collection-hero" style="background:linear-gradient(180deg, ${color}cc 0%, transparent 100%)">
         <div class="collection-header">
-          ${artImg(album.image, "ch-art")}
+          ${artImg(album.image, "ch-art", I.note, 210)}
           <div class="ch-info">
             <div class="ch-kind">${esc(album.kind || "Album")}</div>
             <h1 class="ch-title">${esc(album.title)}</h1>
@@ -4675,7 +5048,7 @@ function paintArtist(id) {
   view.innerHTML = `
     <div class="collection-hero" style="background:linear-gradient(180deg, ${color}cc 0%, transparent 100%)">
       <div class="collection-header">
-        ${artImg(artist.image, "ch-art ch-art-round")}
+        ${artImg(artist.image, "ch-art ch-art-round", I.person, 210)}
         <div class="ch-info">
           <div class="ch-kind">Artist</div>
           <h1 class="ch-title">${esc(artist.name)}</h1>
@@ -4728,7 +5101,7 @@ function discographyHTML(heading, list, type, artistName, key, total = list.leng
   ).join("");
   const rows = list.map((a) => `
     <a class="lib-row" data-card="album" data-token="${esc(a.token)}" data-search="${esc(`${a.title} ${a.year || ""}`)}">
-      ${a.image ? `<img class="lib-cover" loading="lazy" src="${esc(a.image)}">` : `<span class="lib-cover-empty">${I.note}</span>`}
+      ${a.image ? `<img class="lib-cover" loading="lazy"${artSrcAttrs(a.image, 48)}>` : `<span class="lib-cover-empty">${I.note}</span>`}
       <span class="lib-row-meta">
         <span class="lib-row-name">${esc(a.title)}</span>
         <span class="lib-row-sub">${esc([a.year, TYPES[type]?.label].filter(Boolean).join(" · "))}</span>
@@ -4839,7 +5212,7 @@ function paintArtistBody(id) {
             <div><dt>In your library</dt><dd>${libraryCorpus().filter((s) => s.artistId === id || s.artist === artist.name).length} songs</dd></div>
           </dl>
         </div>
-        ${artist.image ? `<img class="about-portrait" src="${esc(artist.image)}" alt="">` : ""}
+        ${artist.image ? `<img class="about-portrait"${artSrcAttrs(artist.image, 220)} alt="">` : ""}
       </div>
       ${relatedSection}`;
     viewCtx = { songs: [], playlistId: null };
@@ -4885,7 +5258,7 @@ async function renderYtPlaylist(browseId) {
     view.innerHTML = `
       <div class="collection-hero" style="background:linear-gradient(180deg, ${color}cc 0%, transparent 100%)">
         <div class="collection-header">
-          ${artImg(p.image, "ch-art")}
+          ${artImg(p.image, "ch-art", I.note, 210)}
           <div class="ch-info">
             <div class="ch-kind">Public playlist</div>
             <h1 class="ch-title">${esc(p.title)}</h1>
@@ -4926,7 +5299,7 @@ async function renderShared(token) {
     view.innerHTML = `
       <div class="collection-hero" style="background:linear-gradient(180deg, ${color}cc 0%, transparent 100%)">
         <div class="collection-header">
-          ${img ? `<img class="ch-art" src="${esc(img)}">` : `<div class="ch-art art-placeholder">${I.note}</div>`}
+          ${img ? `<img class="ch-art"${artSrcAttrs(img, 210)}>` : `<div class="ch-art art-placeholder">${I.note}</div>`}
           <div class="ch-info">
             <div class="ch-kind">Shared playlist</div>
             <h1 class="ch-title">${esc(p.name)}</h1>
@@ -4969,7 +5342,7 @@ function renderPlaylist(id) {
   view.innerHTML = `
     <div class="collection-hero" style="background:linear-gradient(180deg, ${color}cc 0%, transparent 100%)">
       <div class="collection-header">
-        ${img ? `<img class="ch-art" src="${esc(img)}">` : `<div class="ch-art art-placeholder">${I.note}</div>`}
+        ${img ? `<img class="ch-art"${artSrcAttrs(img, 210)}>` : `<div class="ch-art art-placeholder">${I.note}</div>`}
         <div class="ch-info">
           <div class="ch-kind">Playlist</div>
           <h1 class="ch-title editable" id="pl-title" title="Rename">${esc(p.name)}</h1>
@@ -5111,7 +5484,7 @@ function renderLibrary() {
       <span class="lib-row-meta"><span class="lib-row-name">${esc(name)}</span><span class="lib-row-sub">${esc(sub)}</span></span>
     </a>`;
   const cover = (img, cls = "") => img
-    ? `<img class="lib-cover ${cls}" loading="lazy" src="${esc(img)}">`
+    ? `<img class="lib-cover ${cls}" loading="lazy"${artSrcAttrs(img, 48)}>`
     : `<span class="lib-cover-empty ${cls}">${cls.includes("round") ? I.person : I.note}</span>`;
 
   const pinned = [
@@ -5192,7 +5565,7 @@ async function renderTrending() {
       <div class="collection-hero" style="background:linear-gradient(180deg, ${color}cc 0%, transparent 100%)">
         <div class="collection-header">
           <div class="ch-art ch-art-stack" data-type="playlist">
-            ${covers.length >= 4 ? mosaicHTML(covers) : artImg(covers[0])}
+            ${covers.length >= 4 ? mosaicHTML(covers) : artImg(covers[0], "", I.note, 210)}
           </div>
           <div class="ch-info">
             <div class="ch-kind"><span class="type-chip" data-type="playlist">Playlist</span></div>
@@ -5648,126 +6021,6 @@ function djSay() {
 }
 
 /* ==========================================================================
-   Discover — the short-clip feed, moved off Home into a tab of its own so the
-   two never compete for the same scroll.
-   ========================================================================== */
-const DISCOVER_FILTERS = [
-  { id: "foryou", label: "For you", seed: "" },
-  { id: "hiphop", label: "Hip-hop", seed: "hip hop" },
-  { id: "pop", label: "Pop", seed: "pop hits" },
-  { id: "rock", label: "Rock", seed: "rock" },
-  { id: "rnb", label: "R&B", seed: "rnb soul" },
-  { id: "electronic", label: "Electronic", seed: "electronic dance" },
-  { id: "arabic", label: "Arabic", seed: "arabic" },
-  { id: "chill", label: "Chill", seed: "chill lofi" },
-  { id: "focus", label: "Focus", seed: "focus instrumental" },
-  { id: "workout", label: "Workout", seed: "workout energy" },
-  { id: "sad", label: "Sad", seed: "sad songs" },
-  { id: "party", label: "Party", seed: "party anthems" },
-];
-
-let discoverFilter = "foryou";
-let discoverSongs = [];
-
-async function renderDiscover() {
-  const chips = DISCOVER_FILTERS.map((f) =>
-    `<button class="chip${f.id === discoverFilter ? " on" : ""}" data-disc="${f.id}">${esc(f.label)}</button>`).join("");
-  view.innerHTML = `
-    <div class="discover-head">
-      <h1 class="page-title">Discover</h1>
-      <p class="page-lede">Short previews, one at a time. Swipe or scroll to move on.</p>
-      <div class="chip-row" id="discover-chips">${chips}</div>
-    </div>
-    <div class="discover-feed" id="discover-feed"><div class="spinner"></div></div>`;
-  viewCtx = { songs: [], playlistId: null };
-  setTabTitle("Discover");
-
-  $("#discover-chips").onclick = (e) => {
-    const chip = e.target.closest("[data-disc]");
-    if (!chip || chip.dataset.disc === discoverFilter) return;
-    discoverFilter = chip.dataset.disc;
-    renderDiscover();
-  };
-  await loadDiscoverFeed();
-}
-
-async function loadDiscoverFeed() {
-  const feed = $("#discover-feed");
-  if (!feed) return;
-  const filter = DISCOVER_FILTERS.find((f) => f.id === discoverFilter);
-  try {
-    let songs = [];
-    if (filter.id === "foryou") {
-      // "For you" leans on what you've actually played before falling back to
-      // whatever is trending, so a cold account still has something to swipe.
-      const seed = state.library.history[0] || state.library.liked[0];
-      // /api/reco answers with the track list itself, not a wrapper
-      if (seed) songs = await api.reco(seed.id).catch(() => []);
-      if (!songs.length) songs = (await api.get("/api/trending")).singles || [];
-    } else {
-      songs = (await api.search(filter.seed)).songs || [];
-    }
-    if (currentRoute !== "discover") return;
-    discoverSongs = songs.filter((s) => s.id).slice(0, 40);
-    if (!discoverSongs.length) {
-      feed.innerHTML = `<div class="search-empty"><h3>Nothing to discover here yet</h3>
-        <p>Play a few songs and this fills up.</p></div>`;
-      return;
-    }
-    feed.innerHTML = discoverSongs.map((s, i) => discoverCardHTML(s, i)).join("");
-    viewCtx = { songs: discoverSongs, playlistId: null };
-    mountDiscoverObserver();
-  } catch (err) {
-    feed.innerHTML = `<div class="search-empty"><h3>Couldn't load Discover</h3><p>${esc(err.message)}</p></div>`;
-  }
-}
-
-const discoverCardHTML = (s, i) => {
-  const liked = likedIds().has(s.id);
-  const saved = savedIds().has(s.id);
-  return `<article class="disc-card" data-disc-idx="${i}">
-    <div class="disc-art">
-      ${artImg(s.image, "disc-img")}
-      <button class="disc-play" title="Play preview">${I.play}</button>
-    </div>
-    <div class="disc-info">
-      <div class="disc-title">${esc(s.title)}</div>
-      <div class="disc-artist">${esc(s.artist)}</div>
-    </div>
-    <div class="disc-rail">
-      <button class="disc-act act-like ${liked ? "on" : ""}" title="Like">${liked ? I.heartFill : I.heart}</button>
-      <button class="disc-act act-save ${saved ? "on" : ""}" title="Save for later">${saved ? I.bookmarkFill : I.bookmark}</button>
-      <button class="disc-act act-add" title="Add to playlist">${I.plus}</button>
-      <button class="disc-act act-queue" title="Add to queue">${I.addQueue}</button>
-    </div>
-  </article>`;
-};
-
-// Auto-preview whichever card is centred, the way a clip feed behaves.
-let discObserver = null;
-function mountDiscoverObserver() {
-  discObserver?.disconnect();
-  const feed = $("#discover-feed");
-  if (!feed) return;
-  discObserver = new IntersectionObserver((entries) => {
-    entries.forEach((en) => en.target.classList.toggle("in-view", en.isIntersecting && en.intersectionRatio > 0.6));
-  }, { root: feed, threshold: [0, 0.6, 1] });
-  feed.querySelectorAll(".disc-card").forEach((c) => discObserver.observe(c));
-}
-
-view.addEventListener("click", (e) => {
-  const card = e.target.closest("[data-disc-idx]");
-  if (!card) return;
-  const song = discoverSongs[Number(card.dataset.discIdx)];
-  if (!song) return;
-  if (e.target.closest(".act-like")) return toggleLike(song);
-  if (e.target.closest(".act-save")) return toggleSave(song);
-  if (e.target.closest(".act-add")) return openAddPopover(e, song);
-  if (e.target.closest(".act-queue")) return addToQueue(song);
-  playQueue(discoverSongs, Number(card.dataset.discIdx));
-});
-
-/* ==========================================================================
    Saves — the "listen later" shelf that keeps playlists clean
    ========================================================================== */
 async function toggleSave(song) {
@@ -5783,10 +6036,8 @@ async function toggleSave(song) {
 function refreshSaveButtons() {
   const ids = savedIds();
   document.querySelectorAll(".act-save").forEach((btn) => {
-    const row = btn.closest("[data-idx], [data-disc-idx]");
-    const song = row?.dataset.discIdx != null
-      ? discoverSongs[Number(row.dataset.discIdx)]
-      : viewCtx.songs[Number(row?.dataset.idx)];
+    const row = btn.closest("[data-idx]");
+    const song = viewCtx.songs[Number(row?.dataset.idx)];
     if (!song) return;
     const on = ids.has(song.id);
     btn.classList.toggle("on", on);
@@ -6271,6 +6522,15 @@ function profileSettings(el) {
     </div>
 
     <div class="section">
+      <h2>Recommendations</h2>
+      <div class="panel-card">
+        ${row("Import your YouTube history",
+          "Google Takeout → YouTube → history → watch-history.json. Any size is fine — it's read on your device; nothing signs into Google.",
+          `<button class="btn-outline" id="set-import-yt">Import</button>`)}
+      </div>
+    </div>
+
+    <div class="section">
       <h2>Account</h2>
       <div class="panel-card">
         ${row("Display name", esc(state.user?.name || ""), `<button class="btn-outline" id="set-name">Change</button>`)}
@@ -6299,9 +6559,119 @@ function profileSettings(el) {
     setPref("homeRows", null);
     toast("Home layout reset");
   };
+  $("#set-import-yt").onclick = () => {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = "application/json,.json";
+    inp.onchange = () => inp.files[0] && importYoutubeHistory(inp.files[0], $("#set-import-yt"));
+    inp.click();
+  };
   $("#set-name").onclick = changeDisplayName;
   $("#set-pw").onclick = openPasswordModal;
   $("#set-logout").onclick = logout;
+}
+
+/* ---- YouTube Takeout import ----
+   Takeout's watch-history.json is one giant JSON array of plays — for a
+   long-lived account it runs to gigabytes, past what one JS string (let
+   alone JSON.parse) can hold. So the file is streamed: a scanner finds each
+   top-level {...} entry across chunk boundaries and parses it alone, keeping
+   memory flat at one chunk plus the aggregate. Only the top songs (by plays,
+   then recency) are uploaded; the raw export never leaves the machine. */
+function foldTakeoutEntry(byId, e) {
+  const m = String(e?.titleUrl || "").match(/[?&]v=([\w-]{6,20})/);
+  if (!m) return;
+  // music plays only — regular YouTube watches would seed the mixes with
+  // let's-plays and lecture videos
+  const isMusic =
+    e.header === "YouTube Music" ||
+    (Array.isArray(e.products) && e.products.includes("YouTube Music")) ||
+    String(e.titleUrl).includes("music.youtube.com");
+  if (!isMusic) return;
+  const title = String(e.title || "").replace(/^Watched\s+/i, "").trim();
+  if (!title) return;
+  const at = Date.parse(e.time) || 0;
+  const cur = byId.get(m[1]);
+  if (cur) {
+    cur.plays++;
+    if (at > cur.lastPlayed) cur.lastPlayed = at;
+  } else {
+    const artist = String(e.subtitles?.[0]?.name || "").replace(/\s*-\s*Topic$/, "").trim();
+    byId.set(m[1], {
+      id: m[1],
+      title: title.slice(0, 200),
+      artist: artist.slice(0, 120),
+      plays: 1,
+      lastPlayed: at,
+    });
+  }
+}
+
+// Walk the file chunk by chunk, tracking brace depth and string state so an
+// entry split across chunks still comes out whole. Only the current
+// in-flight entry is ever buffered.
+async function streamTakeoutFile(file, byId, onProgress) {
+  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+  let tail = ""; // unfinished entry carried into the next chunk
+  let read = 0;
+  let depth = 0, inStr = false, esc = false;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    read += value.length;
+    const text = tail + value;
+    let start = depth > 0 ? 0 : -1; // a carried tail begins at its entry's {
+    for (let i = tail.length; i < text.length; i++) {
+      const ch = text[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === "{") { if (depth === 0) start = i; depth++; }
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          try { foldTakeoutEntry(byId, JSON.parse(text.slice(start, i + 1))); } catch { /* one bad entry */ }
+          start = -1;
+        }
+      }
+    }
+    tail = depth > 0 && start >= 0 ? text.slice(start) : "";
+    onProgress?.(read);
+  }
+}
+
+async function importYoutubeHistory(file, btn) {
+  const setLabel = (t) => { if (btn) { btn.disabled = !!t; btn.textContent = t || "Import"; } };
+  // catch the wrong export before minutes of parsing
+  const head = await file.slice(0, 64).text();
+  if (head.startsWith("PK"))
+    return toast("That's the Takeout zip — unzip it and pick watch-history.json", true);
+  if (/^\s*</.test(head))
+    return toast("That's the HTML export — redo Takeout with history set to JSON", true);
+
+  const byId = new Map();
+  try {
+    setLabel("Reading 0%");
+    await streamTakeoutFile(file, byId, (read) =>
+      setLabel(`Reading ${Math.min(99, Math.round((read / (file.size || read)) * 100))}%`));
+    const songs = [...byId.values()]
+      .sort((a, b) => b.plays - a.plays || b.lastPlayed - a.lastPlayed)
+      .slice(0, 1000);
+    if (!songs.length) return toast("No YouTube Music plays found in that file", true);
+    setLabel("Uploading…");
+    const { imported } = await api.importYoutube(songs);
+    state.library = await api.library(); // history shelf just grew
+    renderSidebar();
+    toast(`Imported your top ${imported} of ${byId.size.toLocaleString()} songs heard — your picks now know your taste`);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    setLabel("");
+  }
 }
 
 async function changeDisplayName() {
@@ -6366,7 +6736,7 @@ let suppressTabSync = false;
 const routeLabel = (hash) => {
   const route = hash.slice(2).split("/")[0] || "home";
   return ({
-    home: "Home", search: "Search", browse: "Browse", discover: "Discover", library: "Library",
+    home: "Home", search: "Search", browse: "Browse", library: "Library",
     profile: "Profile", liked: "Liked Songs", saves: "Saves", radio: "Radio",
     jam: "Jam", trending: "Trending", admin: "Members",
   })[route] || route.charAt(0).toUpperCase() + route.slice(1);
@@ -6573,7 +6943,6 @@ function mountShelfControls(root = view) {
 const TAB_OWNER = {
   home: "home", trending: "home", radio: "home", jam: "home", together: "home",
   search: "browse", browse: "browse", album: "browse", artist: "browse", ytplaylist: "browse", shared: "browse",
-  discover: "discover",
   library: "library", liked: "library", saves: "library", playlist: "library", smart: "library",
   profile: "profile", admin: "profile",
 };
@@ -6620,7 +6989,8 @@ function router() {
       phoneSearchTap = false;
       break;
     case "browse": renderBrowse(); break;
-    case "discover": renderDiscover(); break;
+    // the Discover feed is gone; old links land on Home
+    case "discover": location.replace("#/home"); break;
     case "profile": renderProfile(param); break;
     case "album": renderAlbum(decodeURIComponent(param)); break;
     case "artist": renderArtist(decodeURIComponent(param)); break;
@@ -6678,11 +7048,12 @@ async function init() {
   updatePlayButton();
   applyAutoplayUI();
   applyShuffleRepeatUI();
-  $("#btn-mute").innerHTML = I.volume;
+  setMuteGlyph(I.volume);
   applyVolume(Number(localStorage.getItem("volume") ?? 80));
 
   try {
     state.library = await api.library();
+    for (const id of state.library.hidden || []) hiddenTracks.add(id);
   } catch {
     toast("Couldn't load your library", true);
   }
