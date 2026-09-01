@@ -6525,7 +6525,7 @@ function profileSettings(el) {
       <h2>Recommendations</h2>
       <div class="panel-card">
         ${row("Import your YouTube history",
-          "Google Takeout → YouTube → history → watch-history.json. Any size is fine — it's read on your device; nothing signs into Google.",
+          "Google Takeout → YouTube → history — the JSON or HTML export both work. Any size is fine — it's read on your device; nothing signs into Google.",
           `<button class="btn-outline" id="set-import-yt">Import</button>`)}
       </div>
     </div>
@@ -6562,7 +6562,7 @@ function profileSettings(el) {
   $("#set-import-yt").onclick = () => {
     const inp = document.createElement("input");
     inp.type = "file";
-    inp.accept = "application/json,.json";
+    inp.accept = "application/json,text/html,.json,.html";
     inp.onchange = () => inp.files[0] && importYoutubeHistory(inp.files[0], $("#set-import-yt"));
     inp.click();
   };
@@ -6572,12 +6572,15 @@ function profileSettings(el) {
 }
 
 /* ---- YouTube Takeout import ----
-   Takeout's watch-history.json is one giant JSON array of plays — for a
-   long-lived account it runs to gigabytes, past what one JS string (let
-   alone JSON.parse) can hold. So the file is streamed: a scanner finds each
-   top-level {...} entry across chunk boundaries and parses it alone, keeping
-   memory flat at one chunk plus the aggregate. Only the top songs (by plays,
-   then recency) are uploaded; the raw export never leaves the machine. */
+   Takeout's watch history is one giant file of plays — for a long-lived
+   account it runs to gigabytes, past what one JS string (let alone
+   JSON.parse) can hold. So the file is streamed, whichever format Takeout
+   was set to: for watch-history.json a scanner finds each top-level {...}
+   entry across chunk boundaries and parses it alone; for the (default)
+   watch-history.html the chunks are split on the per-play cell divider and
+   each cell is folded alone. Either way memory stays flat at one chunk plus
+   the aggregate. Only the top songs (by plays, then recency) are uploaded;
+   the raw export never leaves the machine. */
 function foldTakeoutEntry(byId, e) {
   const m = String(e?.titleUrl || "").match(/[?&]v=([\w-]{6,20})/);
   if (!m) return;
@@ -6644,19 +6647,77 @@ async function streamTakeoutFile(file, byId, onProgress) {
   }
 }
 
+// The HTML export wraps every play in an outer-cell div, so that tag doubles
+// as the record separator: split each chunk on it, fold the complete pieces,
+// and carry the unfinished last piece (which may even end mid-separator)
+// into the next chunk.
+const TAKEOUT_HTML_CELL = '<div class="outer-cell';
+
+function decodeTakeoutHtml(s) {
+  return s.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+    .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ");
+}
+
+function foldTakeoutHtmlCell(byId, cell) {
+  // no match for removed videos, ads, and search entries
+  const watch = cell.match(/Watched\s*<a href="[^"]*[?&]v=([\w-]{6,20})[^"]*">([\s\S]*?)<\/a>/);
+  if (!watch) return;
+  // music plays only — regular YouTube watches would seed the mixes with
+  // let's-plays and lecture videos
+  const isMusic =
+    /mdl-typography--title">\s*YouTube Music</.test(cell) ||
+    cell.includes("https://music.youtube.com/watch");
+  if (!isMusic) return;
+  const id = watch[1];
+  let title = decodeTakeoutHtml(watch[2]).trim();
+  const chan = cell.slice(watch.index).match(/<a href="https:\/\/www\.youtube\.com\/channel\/[^"]*">([\s\S]*?)<\/a>/);
+  const artist = chan ? decodeTakeoutHtml(chan[1]).replace(/\s*-\s*Topic$/, "").trim() : "";
+  // the HTML export writes "Artist - Title" as the link text — strip the echo
+  if (artist && title.toLowerCase().startsWith(artist.toLowerCase() + " - "))
+    title = title.slice(artist.length + 3).trim();
+  if (!title) return;
+  const time = cell.match(/(\w{3} \d{1,2}, \d{4}, \d{1,2}:\d{2}:\d{2}\s*[AP]M)/);
+  const at = time ? Date.parse(time[1]) || 0 : 0;
+  const cur = byId.get(id);
+  if (cur) {
+    cur.plays++;
+    if (at > cur.lastPlayed) cur.lastPlayed = at;
+  } else {
+    byId.set(id, { id, title: title.slice(0, 200), artist: artist.slice(0, 120), plays: 1, lastPlayed: at });
+  }
+}
+
+async function streamTakeoutHtmlFile(file, byId, onProgress) {
+  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+  let tail = ""; // unfinished cell carried into the next chunk
+  let read = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    read += value.length;
+    const cells = (tail + value).split(TAKEOUT_HTML_CELL);
+    tail = cells.pop();
+    // the first piece of the first chunk is the document head — folding it is
+    // a no-op, so no special case
+    for (const cell of cells) foldTakeoutHtmlCell(byId, cell);
+    onProgress?.(read);
+  }
+  foldTakeoutHtmlCell(byId, tail);
+}
+
 async function importYoutubeHistory(file, btn) {
   const setLabel = (t) => { if (btn) { btn.disabled = !!t; btn.textContent = t || "Import"; } };
-  // catch the wrong export before minutes of parsing
+  // sniff the format up front — the zip we can't read, HTML vs JSON we can
   const head = await file.slice(0, 64).text();
   if (head.startsWith("PK"))
-    return toast("That's the Takeout zip — unzip it and pick watch-history.json", true);
-  if (/^\s*</.test(head))
-    return toast("That's the HTML export — redo Takeout with history set to JSON", true);
+    return toast("That's the Takeout zip — unzip it and pick the watch-history file", true);
+  const stream = /^\s*</.test(head) ? streamTakeoutHtmlFile : streamTakeoutFile;
 
   const byId = new Map();
   try {
     setLabel("Reading 0%");
-    await streamTakeoutFile(file, byId, (read) =>
+    await stream(file, byId, (read) =>
       setLabel(`Reading ${Math.min(99, Math.round((read / (file.size || read)) * 100))}%`));
     const songs = [...byId.values()]
       .sort((a, b) => b.plays - a.plays || b.lastPlayed - a.lastPlayed)
