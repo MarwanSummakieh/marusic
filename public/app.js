@@ -4034,6 +4034,10 @@ view.addEventListener("click", async (e) => {
       // Video cards sit on the search overview beside the song rows, so they
       // index into their own list rather than viewCtx.songs.
       playSongRadio(searchData?.videos?.[Number(card.dataset.idx)]);
+    } else if (kind === "speeddial") {
+      // a speed-dial press means "that, now": the song plus a radio from it
+      const s = homeSpeedDial[Number(card.dataset.idx)];
+      if (s) playSongRadio(s);
     } else if (kind === "quickpick") {
       const pick = homeQuickPicks[Number(card.dataset.idx)];
       if (!pick) return;
@@ -4143,6 +4147,7 @@ async function startRadio(name) {
    it wherever you want. The layout lives in prefs, so it survives reloads. */
 const HOME_ROWS = [
   { id: "shortcuts", label: "Shortcuts" },
+  { id: "speeddial", label: "Speed dial" },
   { id: "quickpicks", label: "Quick picks" },
   { id: "mixes", label: "Made for you" },
   { id: "history", label: "Jump back in" },
@@ -4223,6 +4228,7 @@ function renderHome() {
   const bodyFor = (row) => {
     if (row.id === "shortcuts")
       return shortcuts ? `<div class="shortcut-grid">${shortcuts}</div>` : "";
+    if (row.id === "speeddial") return `<div class="section" id="home-speeddial"></div>`;
     if (row.id === "quickpicks") return `<div class="section" id="home-quickpicks"></div>`;
     if (row.id === "mixes") return `<div class="section" id="home-mixes"></div>`;
     if (row.id === "history")
@@ -4267,6 +4273,7 @@ function renderHome() {
   $("#home-customise").onclick = () => { homeEditing = !homeEditing; renderHome(); };
 
   const wanted = (id) => rows.some((r) => r.id === id && (homeEditing || !r.hidden));
+  if (wanted("speeddial")) loadHomeSpeedDial();
   if (wanted("quickpicks")) loadHomeQuickPicks();
   if (wanted("mixes")) loadHomeMixes();
   if (wanted("trending")) loadHomeTrending();
@@ -4367,8 +4374,52 @@ const trendingPlaylistCard = (singles) =>
     sub: `${singles.length} single${singles.length === 1 ? "" : "s"} · YouTube Music`,
   });
 
-/* Quick picks — the speed dial.
-   A wall of single tracks four deep that pages sideways, so a screenful puts a
+/* Speed dial — the mockup's grid of your most-played tracks: big one-tap
+   tiles under a personal header. Tapping one starts that song plus a radio
+   built from it, because a speed-dial press means "that, now" — not "queue
+   the grid". Tiles show cover art when the snapshot has one and fall back
+   to initials on the mockup's gradient set when it doesn't. */
+let homeSpeedDial = [];
+
+const SD_GRADS = [
+  ["#2c1a45", "#6b3fa8"], ["#451a38", "#b4407e"], ["#241634", "#52356e"],
+  ["#3a1d33", "#8a3c74"], ["#35164a", "#7c3ec2"], ["#2a1230", "#94356b"],
+];
+
+const sdInitials = (title = "") =>
+  title.split(/\s+/).filter((w) => /[\wÀ-￿]/.test(w))
+    .slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "♪";
+
+const speedDialHTML = (s, i) => {
+  const [a, b] = SD_GRADS[i % SD_GRADS.length];
+  return `
+  <div class="sd-tile" data-card="speeddial" data-idx="${i}" title="${esc(s.title)} · ${esc(s.artist)}"
+       style="background:linear-gradient(140deg,${a},${b})">
+    ${s.image ? `<img class="sd-art" src="${esc(s.image)}" alt="" loading="lazy">`
+              : `<span class="sd-init">${esc(sdInitials(s.title))}</span>`}
+    <span class="sd-label">${esc(s.title)}</span>
+  </div>`;
+};
+
+async function loadHomeSpeedDial() {
+  try {
+    const songs = (await api.topPlayed()).slice(0, 12);
+    const el = $("#home-speeddial");
+    if (!el || !songs.length) return;
+    homeSpeedDial = songs;
+    el.innerHTML = `
+      <div class="sd-head">
+        <span class="sd-avatar">${esc((state.user?.name || "?")[0].toUpperCase())}</span>
+        <span class="sd-name">${esc(String(state.user?.name || "").toUpperCase())}</span>
+      </div>
+      <h2>Speed dial</h2>
+      <div class="sd-grid">${songs.map(speedDialHTML).join("")}</div>`;
+    mountShelfControls();
+  } catch { /* a shelf like any other — optional */ }
+}
+
+/* Quick picks — the recommender's wall.
+   Single tracks four deep that page sideways, so a screenful puts a
    dozen songs one tap away instead of a dozen things to open first. Deliberately
    not cards: cards are for something you browse into, and none of these have an
    inside. */
