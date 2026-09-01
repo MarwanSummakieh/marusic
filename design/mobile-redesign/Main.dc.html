@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; background: #0b0712; color: #fff; font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+    a { color: #f0559d; } a:hover { color: #9b6cf5; }
+    .phone { width: 390px; height: 844px; background: #0b0712; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+    .icon { width: 24px; height: 24px; flex: none; }
+    .icon path, .icon circle, .icon rect { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .icon .fill { fill: currentColor; stroke: none; }
+    .tile-label { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 10px 8px; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: linear-gradient(180deg, transparent, rgba(5, 2, 9, .85)); border-radius: 0 0 8px 8px; }
+    .tile-init { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: 800; letter-spacing: -1px; color: rgba(255, 255, 255, .22); }
+  </style>
+</helmet>
+<div class="phone">
+  <div style="position: absolute; left: 0; right: 0; top: 0; height: 380px; background: radial-gradient(120% 60% at 50% -12%, rgba(155, 108, 245, .30), rgba(240, 85, 157, .12) 48%, transparent 75%); pointer-events: none;"></div>
+
+  <div style="display: flex; align-items: center; gap: 10px; padding: 18px 16px 10px; position: relative;">
+    <svg viewBox="0 0 24 24" width="30" height="30" style="filter: drop-shadow(0 0 10px rgba(240, 85, 157, .4));"><defs><linearGradient id="mg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f0559d"/><stop offset="1" stop-color="#9b6cf5"/></linearGradient></defs><circle cx="12" cy="12" r="11.5" fill="#0b0712"/><circle cx="12" cy="12" r="11.5" fill="none" stroke="url(#mg)" stroke-width="1"/><circle cx="12" cy="12" r="9" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width=".5"/><circle cx="12" cy="12" r="7.2" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width=".5"/><circle cx="12" cy="12" r="4.4" fill="url(#mg)"/><path d="M9.6 14.4V9.6L12 12.5 14.4 9.6V14.4" fill="none" stroke="#0b0712" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round"/></svg>
+    <span style="font-size: 21px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(90deg, #f0559d, #9b6cf5); -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent;">Marusic</span>
+    <div style="display: flex; align-items: center; gap: 4px; margin-left: auto;">
+      <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #fff;"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg></div>
+      <div style="width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, #f0559d, #9b6cf5); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; color: #14091d;">M</div>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 8px; padding: 6px 16px 14px; position: relative;">
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .09); font-size: 13px; font-weight: 600;">Energize</div>
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .09); font-size: 13px; font-weight: 600;">Relax</div>
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .09); font-size: 13px; font-weight: 600;">Feel good</div>
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .09); font-size: 13px; font-weight: 600;">Workout</div>
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .09); font-size: 13px; font-weight: 600;">Focus</div>
+  </div>
+
+  <div style="padding: 8px 16px 0; position: relative;">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <div style="width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(135deg, #f0559d, #9b6cf5); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #14091d;">M</div>
+      <span style="font-size: 12px; font-weight: 700; letter-spacing: 1.5px; color: #b6a8c9;">MARWAN</span>
+    </div>
+    <div style="font-size: 24px; font-weight: 800; letter-spacing: -0.5px; margin: 4px 0 14px;">Speed dial</div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+      <div style="position: relative; height: 114px; border-radius: 8px; background: linear-gradient(140deg, #2c1a45, #6b3fa8);"><div class="tile-init">ER</div><div class="tile-label">Regal Ancestor S…</div></div>
+      <div style="position: relative; height: 114px; border-radius: 8px; background: linear-gradient(140deg, #451a38, #b4407e); box-shadow: 0 0 0 2.5px #f0559d;"><div class="tile-init">ID</div><div class="tile-label">Initial D - Deja Vu</div></div>
+      <div style="position: relative; height: 114px; border-radius: 8px; background: linear-gradient(140deg, #241634, #52356e);"><div class="tile-init">RB</div><div class="tile-label">I'll Be There for Y…</div></div>
+      <div style="position: relative; height: 114px; border-radius: 8px; background: linear-gradient(140deg, #3a1d33, #8a3c74);"><div class="tile-init">KE</div><div class="tile-label">Somewhere Only…</div></div>
+      <div style="position: relative; height: 114px; border-radius: 8px; background: linear-gradient(140deg, #35164a, #7c3ec2);"><div class="tile-init">RG</div><div class="tile-label">Real Gone</div></div>
+      <div style="position: relative; height: 114px; border-radius: 8px; background: linear-gradient(140deg, #2a1230, #94356b);"><div class="tile-init">CP</div><div class="tile-label">Come Play</div></div>
+    </div>
+  </div>
+
+  <div style="padding: 22px 16px 0; position: relative; flex: 1; min-height: 0;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+      <div style="font-size: 24px; font-weight: 800; letter-spacing: -0.5px;">Quick picks</div>
+      <div style="height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255, 255, 255, .25); font-size: 13px; font-weight: 700;"><svg class="icon" viewBox="0 0 24 24" style="width: 15px; height: 15px;"><path class="fill" d="M8 5.5v13l11-6.5z"/></svg>Play all</div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px;">
+        <div style="width: 48px; height: 48px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #4a2340, #b0507e);"></div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Whisky Peak Saloon feat. Leo P</div>
+          <div style="font-size: 13px; color: #b6a8c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Sonya Belousova, Giona Ostinelli</div>
+        </div>
+        <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #b6a8c9;"><svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px;"><circle class="fill" cx="12" cy="5" r="1.7"/><circle class="fill" cx="12" cy="12" r="1.7"/><circle class="fill" cx="12" cy="19" r="1.7"/></svg></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px;">
+        <div style="width: 48px; height: 48px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #241634, #5b3b7d);"></div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">DARK SOULS III</div>
+          <div style="font-size: 13px; color: #b6a8c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Yuka Kitamura • 4.3M plays</div>
+        </div>
+        <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #b6a8c9;"><svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px;"><circle class="fill" cx="12" cy="5" r="1.7"/><circle class="fill" cx="12" cy="12" r="1.7"/><circle class="fill" cx="12" cy="19" r="1.7"/></svg></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px;">
+        <div style="width: 48px; height: 48px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #45203a, #9c4c8a);"></div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">California Dreamin' (Single Version)</div>
+          <div style="font-size: 13px; color: #b6a8c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">The Mamas &amp; The Papas • 946M plays</div>
+        </div>
+        <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #b6a8c9;"><svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px;"><circle class="fill" cx="12" cy="5" r="1.7"/><circle class="fill" cx="12" cy="12" r="1.7"/><circle class="fill" cx="12" cy="19" r="1.7"/></svg></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin: 0 8px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: #1d1430; border: 1px solid rgba(255, 255, 255, .07);">
+    <div style="width: 40px; height: 40px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #451a38, #b4407e);"></div>
+    <div style="flex: 1; min-width: 0;">
+      <div style="font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Initial D - Deja Vu</div>
+      <div style="font-size: 12px; color: #b6a8c9;">Pretty ok</div>
+    </div>
+    <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;"><svg class="icon" viewBox="0 0 24 24" style="width: 28px; height: 28px;"><path class="fill" d="M8 5.5v13l11-6.5z"/></svg></div>
+  </div>
+
+  <div style="display: flex; padding: 8px 8px 14px; background: linear-gradient(180deg, transparent, rgba(11, 7, 18, .9) 30%);">
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; color: #fff;"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><path d="M4 11.5 12 4.5l8 7"/><path d="M6 10.5V20h12v-9.5"/></svg><span style="font-size: 11px; font-weight: 600;">Home</span></div>
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; color: #8d7fa3;"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg><span style="font-size: 11px; font-weight: 600;">Browse</span></div>
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; color: #8d7fa3;"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><path d="M5 4v16M9 4v16"/><path d="m13.5 4.6 4.8 15"/></svg><span style="font-size: 11px; font-weight: 600;">Library</span></div>
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; color: #8d7fa3;"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><circle cx="12" cy="8" r="4"/><path d="M4.5 20c1.5-3.5 4.3-5 7.5-5s6 1.5 7.5 5"/></svg><span style="font-size: 11px; font-weight: 600;">Profile</span></div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; background: #0b0712; color: #fff; font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+    a { color: #f0559d; } a:hover { color: #9b6cf5; }
+    .phone { width: 390px; height: 844px; background: #0b0712; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+    .icon { width: 24px; height: 24px; flex: none; }
+    .icon path, .icon circle, .icon rect { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .icon .fill { fill: currentColor; stroke: none; }
+  </style>
+</helmet>
+<div class="phone">
+  <div style="position: absolute; left: 0; right: 0; top: 0; height: 220px; background: radial-gradient(130% 70% at 50% -20%, rgba(155, 108, 245, .22), rgba(240, 85, 157, .08) 50%, transparent 78%); pointer-events: none;"></div>
+
+  <div style="display: flex; align-items: center; gap: 6px; padding: 14px 10px 10px; position: relative;">
+    <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;"><svg class="icon" viewBox="0 0 24 24"><path d="M20 12H5"/><path d="m11 6-6 6 6 6"/></svg></div>
+    <div style="flex: 1; display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; border-radius: 22px; background: rgba(255, 255, 255, .1); border: 1px solid rgba(240, 85, 157, .55); box-shadow: 0 0 0 3px rgba(240, 85, 157, .12);">
+      <span style="font-size: 16px; font-weight: 500;">dark s</span>
+      <span style="width: 2px; height: 20px; background: #f0559d; border-radius: 1px;"></span>
+      <span style="flex: 1;"></span>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #b6a8c9;"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; padding: 6px 4px; position: relative;">
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 12px;">
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #b6a8c9;"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+      <span style="flex: 1; font-size: 16px;">dark <b>souls iii</b></span>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #8d7fa3;"><path d="M17 17 7 7"/><path d="M7 14V7h7"/></svg>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 12px;">
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #b6a8c9;"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+      <span style="flex: 1; font-size: 16px;">dark <b>souls ost</b></span>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #8d7fa3;"><path d="M17 17 7 7"/><path d="M7 14V7h7"/></svg>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 12px;">
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #b6a8c9;"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+      <span style="flex: 1; font-size: 16px;">dark <b>souls yuka kitamura</b></span>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #8d7fa3;"><path d="M17 17 7 7"/><path d="M7 14V7h7"/></svg>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 60px; padding: 0 12px;">
+      <div style="width: 44px; height: 44px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #241634, #5b3b7d);"></div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">DARK SOULS III</div>
+        <div style="font-size: 13px; color: #b6a8c9;">Song • Yuka Kitamura</div>
+      </div>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #8d7fa3;"><path d="M17 17 7 7"/><path d="M7 14V7h7"/></svg>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 60px; padding: 0 12px;">
+      <div style="width: 44px; height: 44px; border-radius: 50%; flex: none; background: linear-gradient(140deg, #35164a, #7c3ec2);"></div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Yuka Kitamura</div>
+        <div style="font-size: 13px; color: #b6a8c9;">Artist</div>
+      </div>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #8d7fa3;"><path d="M17 17 7 7"/><path d="M7 14V7h7"/></svg>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 60px; padding: 0 12px;">
+      <div style="width: 44px; height: 44px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #3a1d33, #8a3c74);"></div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">DARK SOULS III Original Soundtrack</div>
+        <div style="font-size: 13px; color: #b6a8c9;">Album • Yuka Kitamura, Motoi Sakuraba</div>
+      </div>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #8d7fa3;"><path d="M17 17 7 7"/><path d="M7 14V7h7"/></svg>
+    </div>
+  </div>
+
+  <div style="padding: 18px 16px 8px; position: relative;">
+    <div style="font-size: 13px; font-weight: 700; letter-spacing: 1px; color: #b6a8c9;">RECENT SEARCHES</div>
+  </div>
+  <div style="display: flex; flex-direction: column; padding: 0 4px; position: relative;">
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 12px;">
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #b6a8c9;"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+      <span style="flex: 1; font-size: 16px;">initial d</span>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 18px; height: 18px; color: #8d7fa3;"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 12px;">
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #b6a8c9;"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+      <span style="flex: 1; font-size: 16px;">arcane come play</span>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 18px; height: 18px; color: #8d7fa3;"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 12px;">
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #b6a8c9;"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+      <span style="flex: 1; font-size: 16px;">dropkick murphys</span>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 18px; height: 18px; color: #8d7fa3;"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

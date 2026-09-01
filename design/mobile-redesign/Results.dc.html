@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; background: #0b0712; color: #fff; font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+    a { color: #f0559d; } a:hover { color: #9b6cf5; }
+    .phone { width: 390px; height: 844px; background: #0b0712; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+    .icon { width: 24px; height: 24px; flex: none; }
+    .icon path, .icon circle, .icon rect { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .icon .fill { fill: currentColor; stroke: none; }
+  </style>
+</helmet>
+<div class="phone">
+  <div style="position: absolute; left: 0; right: 0; top: 0; height: 220px; background: radial-gradient(130% 70% at 50% -20%, rgba(155, 108, 245, .22), rgba(240, 85, 157, .08) 50%, transparent 78%); pointer-events: none;"></div>
+
+  <div style="display: flex; align-items: center; gap: 6px; padding: 14px 10px 10px; position: relative;">
+    <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;"><svg class="icon" viewBox="0 0 24 24"><path d="M20 12H5"/><path d="m11 6-6 6 6 6"/></svg></div>
+    <div style="flex: 1; display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; border-radius: 22px; background: rgba(255, 255, 255, .1); border: 1px solid transparent;">
+      <span style="flex: 1; font-size: 16px; font-weight: 500;">dark souls iii</span>
+      <svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px; color: #b6a8c9;"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 8px; padding: 8px 16px 12px; position: relative;">
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: #fff; color: #0b0712; font-size: 13px; font-weight: 700;">Songs</div>
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .09); font-size: 13px; font-weight: 600;">Albums</div>
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .09); font-size: 13px; font-weight: 600;">Artists</div>
+    <div style="flex: none; white-space: nowrap; height: 34px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .09); font-size: 13px; font-weight: 600;">Playlists</div>
+  </div>
+
+  <div style="padding: 6px 16px 0; position: relative;">
+    <div style="font-size: 20px; font-weight: 800; letter-spacing: -0.3px; margin-bottom: 10px;">Top result</div>
+    <div style="display: flex; align-items: center; gap: 14px; padding: 12px; border-radius: 12px; background: #1d1430; border: 1px solid rgba(255, 255, 255, .07);">
+      <div style="width: 76px; height: 76px; border-radius: 8px; flex: none; background: linear-gradient(140deg, #241634, #5b3b7d); display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 800; color: rgba(255, 255, 255, .22);">DS</div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 17px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">DARK SOULS III</div>
+        <div style="font-size: 13px; color: #b6a8c9; margin-top: 2px;">Song • Yuka Kitamura • 4.3M plays</div>
+      </div>
+      <div style="width: 48px; height: 48px; border-radius: 50%; flex: none; background: linear-gradient(135deg, #f0559d, #9b6cf5); display: flex; align-items: center; justify-content: center; color: #14091d; box-shadow: 0 4px 16px rgba(240, 85, 157, .35);"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><path class="fill" d="M8 5.5v13l11-6.5z"/></svg></div>
+    </div>
+  </div>
+
+  <div style="padding: 20px 16px 0; position: relative; flex: 1; min-height: 0;">
+    <div style="font-size: 20px; font-weight: 800; letter-spacing: -0.3px; margin-bottom: 6px;">Songs</div>
+    <div style="display: flex; flex-direction: column; gap: 4px;">
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px;">
+        <div style="width: 48px; height: 48px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #2c1a45, #6b3fa8);"></div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Secret Betrayal</div>
+          <div style="font-size: 13px; color: #b6a8c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Yuka Kitamura • 1.1M plays</div>
+        </div>
+        <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #b6a8c9;"><svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px;"><circle class="fill" cx="12" cy="5" r="1.7"/><circle class="fill" cx="12" cy="12" r="1.7"/><circle class="fill" cx="12" cy="19" r="1.7"/></svg></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px;">
+        <div style="width: 48px; height: 48px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #451a38, #b4407e);"></div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Soul of Cinder</div>
+          <div style="font-size: 13px; color: #b6a8c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Yuka Kitamura, Motoi Sakuraba • 3.2M plays</div>
+        </div>
+        <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #b6a8c9;"><svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px;"><circle class="fill" cx="12" cy="5" r="1.7"/><circle class="fill" cx="12" cy="12" r="1.7"/><circle class="fill" cx="12" cy="19" r="1.7"/></svg></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px;">
+        <div style="width: 48px; height: 48px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #3a1d33, #8a3c74);"></div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Abyss Watchers</div>
+          <div style="font-size: 13px; color: #b6a8c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Yuka Kitamura • 2.8M plays</div>
+        </div>
+        <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #b6a8c9;"><svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px;"><circle class="fill" cx="12" cy="5" r="1.7"/><circle class="fill" cx="12" cy="12" r="1.7"/><circle class="fill" cx="12" cy="19" r="1.7"/></svg></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; min-height: 56px;">
+        <div style="width: 48px; height: 48px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #2a1230, #94356b);"></div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Epilogue</div>
+          <div style="font-size: 13px; color: #b6a8c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Yuka Kitamura • 890K plays</div>
+        </div>
+        <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #b6a8c9;"><svg class="icon" viewBox="0 0 24 24" style="width: 20px; height: 20px;"><circle class="fill" cx="12" cy="5" r="1.7"/><circle class="fill" cx="12" cy="12" r="1.7"/><circle class="fill" cx="12" cy="19" r="1.7"/></svg></div>
+      </div>
+    </div>
+
+    <div style="font-size: 20px; font-weight: 800; letter-spacing: -0.3px; margin: 16px 0 6px;">Artists</div>
+    <div style="display: flex; align-items: center; gap: 12px; min-height: 60px;">
+      <div style="width: 52px; height: 52px; border-radius: 50%; flex: none; background: linear-gradient(140deg, #35164a, #7c3ec2); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 800; color: rgba(255, 255, 255, .22);">YK</div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 15px; font-weight: 700;">Yuka Kitamura</div>
+        <div style="font-size: 13px; color: #b6a8c9;">Artist</div>
+      </div>
+      <div style="height: 34px; display: flex; align-items: center; padding: 0 16px; border-radius: 17px; border: 1px solid rgba(255, 255, 255, .25); font-size: 13px; font-weight: 700;">Follow</div>
+    </div>
+  </div>
+
+  <div style="margin: 0 8px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: #1d1430; border: 1px solid rgba(255, 255, 255, .07);">
+    <div style="width: 40px; height: 40px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #451a38, #b4407e);"></div>
+    <div style="flex: 1; min-width: 0;">
+      <div style="font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Initial D - Deja Vu</div>
+      <div style="font-size: 12px; color: #b6a8c9;">Pretty ok</div>
+    </div>
+    <div style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;"><svg class="icon" viewBox="0 0 24 24" style="width: 28px; height: 28px;"><path class="fill" d="M8 5.5v13l11-6.5z"/></svg></div>
+  </div>
+
+  <div style="display: flex; padding: 8px 8px 14px; background: linear-gradient(180deg, transparent, rgba(11, 7, 18, .9) 30%);">
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; color: #8d7fa3;"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><path d="M4 11.5 12 4.5l8 7"/><path d="M6 10.5V20h12v-9.5"/></svg><span style="font-size: 11px; font-weight: 600;">Home</span></div>
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; color: #8d7fa3;"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg><span style="font-size: 11px; font-weight: 600;">Browse</span></div>
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; color: #8d7fa3;"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><path d="M5 4v16M9 4v16"/><path d="m13.5 4.6 4.8 15"/></svg><span style="font-size: 11px; font-weight: 600;">Library</span></div>
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; color: #8d7fa3;"><svg class="icon" viewBox="0 0 24 24" style="width: 22px; height: 22px;"><circle cx="12" cy="8" r="4"/><path d="M4.5 20c1.5-3.5 4.3-5 7.5-5s6 1.5 7.5 5"/></svg><span style="font-size: 11px; font-weight: 600;">Profile</span></div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

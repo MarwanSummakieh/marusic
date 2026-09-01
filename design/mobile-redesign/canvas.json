@@ -1,0 +1,10 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 390, "h": 844, "title": "Home" },
+    { "file": "Search.dc.html", "x": 500, "y": 0, "w": 390, "h": 844, "title": "Search — typing" },
+    { "file": "Results.dc.html", "x": 1000, "y": 0, "w": 390, "h": 844, "title": "Search — results" },
+    { "file": "Browse.dc.html", "x": 1500, "y": 0, "w": 390, "h": 844, "title": "Browse" },
+    { "file": "Player.dc.html", "x": 2000, "y": 0, "w": 390, "h": 844, "title": "Now playing" }
+  ],
+  "launch": { "view": "canvas" }
+}
