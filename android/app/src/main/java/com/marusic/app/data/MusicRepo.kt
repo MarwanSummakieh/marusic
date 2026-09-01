@@ -55,12 +55,18 @@ class MusicRepo(private val api: ApiClient) {
     private val quickPicks = Ttl<QuickPicks>(3 * 60 * 60 * 1000L)
     private val mixes = Ttl<List<Mix>>(60 * 60 * 1000L)
     private val stations = Ttl<List<RadioStation>>(6 * 60 * 60 * 1000L)
+    // play counts move slowly; an hour keeps the speed dial steady in a session
+    private val topPlayed = Ttl<List<Song>>(60 * 60 * 1000L)
 
     suspend fun trending(): TrendingResponse =
         trending.get() ?: trending.set(api.get("/api/trending", TrendingResponse.serializer()))
 
     suspend fun quickPicks(): QuickPicks =
         quickPicks.get() ?: quickPicks.set(api.get("/api/quickpicks", QuickPicks.serializer()))
+
+    /** The speed dial's fuel: your most-played tracks, by real play counts. */
+    suspend fun topPlayed(): List<Song> =
+        topPlayed.get() ?: topPlayed.set(api.get("/api/top-played?limit=12", ListSerializer(Song.serializer())))
 
     suspend fun mixes(): List<Mix> =
         mixes.get() ?: mixes.set(api.get("/api/mixes", MixesResponse.serializer()).mixes)

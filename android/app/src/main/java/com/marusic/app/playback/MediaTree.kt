@@ -22,6 +22,7 @@ object MediaIds {
     const val LIBRARY = "library"
     const val RADIO = "radio"
     const val QUICKPICKS = "home/quickpicks"
+    const val SPEEDDIAL = "home/speeddial"
     const val TRENDING = "home/trending"
     const val RELEASES = "home/releases"
     const val LIKED = "library/liked"

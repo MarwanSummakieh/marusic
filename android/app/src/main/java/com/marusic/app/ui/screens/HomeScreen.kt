@@ -3,6 +3,7 @@
 package com.marusic.app.ui.screens
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,11 +23,14 @@ import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -42,6 +46,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -85,6 +91,7 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
     var quickTick by remember { mutableIntStateOf(0) }
     var trendTick by remember { mutableIntStateOf(0) }
     var radioTick by remember { mutableIntStateOf(0) }
+    var topTick by remember { mutableIntStateOf(0) }
     var customising by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { runCatching { container.repo.library() } }
@@ -92,9 +99,27 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
     val quickLoad = rememberLoad(quickTick) { container.repo.quickPicks() }
     val trendingLoad = rememberLoad(trendTick) { container.repo.trending() }
     val radioLoad = rememberLoad(radioTick) { container.repo.radioStations() }
+    val topLoad = rememberLoad(topTick) { container.repo.topPlayed() }
 
     val s = settings
     val visible = { id: String -> s?.rowVisible(id) ?: true }
+
+    Box {
+        // the mockup's aurora: pink/purple bleeding down from the top edge
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(380.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Web.accent2.copy(alpha = 0.28f),
+                            Web.accent.copy(alpha = 0.10f),
+                            Color.Transparent,
+                        )
+                    )
+                )
+        )
 
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
         // ---- brand bar ----
@@ -109,6 +134,9 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
                     fontSize = 19.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = (-0.4).sp,
+                    style = LocalTextStyle.current.copy(
+                        brush = Brush.linearGradient(listOf(Web.accent, Web.accent2))
+                    ),
                     modifier = Modifier.padding(start = 8.dp).weight(1f),
                 )
                 AvatarButton(s?.userName.orEmpty()) { nav.navigate("profile") }
@@ -158,8 +186,81 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
             }
         }
 
+        // ---- Speed dial ----
+        // The mockup's grid: your most-played tracks as big one-tap tiles
+        // under a personal header. A tap means "that, now" — the song starts
+        // and autoplay grows a radio out of it.
+        if (visible("speeddial")) {
+            when (val td = topLoad) {
+                is Load.Ok -> {
+                    val top = td.value.take(6)
+                    if (top.isNotEmpty()) {
+                        item {
+                            Row(
+                                Modifier.padding(start = 16.dp, end = 16.dp, top = 22.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(Brush.linearGradient(listOf(Web.accent, Web.accent2))),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        s?.userName?.trim()?.firstOrNull()?.uppercase() ?: "?",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Web.onAccent,
+                                    )
+                                }
+                                Text(
+                                    s?.userName.orEmpty().uppercase(),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.5.sp,
+                                    color = Web.sub,
+                                )
+                            }
+                        }
+                        item {
+                            Text(
+                                "Speed dial",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = (-0.5).sp,
+                                modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 14.dp),
+                            )
+                        }
+                        item {
+                            Column(
+                                Modifier.padding(horizontal = 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                top.chunked(3).forEachIndexed { rowIdx, rowSongs ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        rowSongs.forEachIndexed { colIdx, song ->
+                                            SpeedDialTile(
+                                                song,
+                                                rowIdx * 3 + colIdx,
+                                                Modifier.weight(1f),
+                                            ) { pc.play(listOf(song), 0, MediaIds.SPEEDDIAL) }
+                                        }
+                                        repeat(3 - rowSongs.size) { Spacer(Modifier.weight(1f)) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                is Load.Err -> item { RowError("Speed dial", td.message) { topTick++ } }
+                is Load.Loading -> Unit
+            }
+        }
+
         // ---- Quick picks ----
-        // The web's speed dial: single tracks stacked four deep, paging
+        // The recommender's wall: single tracks stacked four deep, paging
         // sideways. Not cards — none of these have an inside to open.
         if (visible("quickpicks")) {
             when (val q = quickLoad) {
@@ -328,6 +429,7 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
             }
         }
     }
+    } // aurora wrapper
 
     if (customising && s != null) {
         ModalBottomSheet(onDismissRequest = { customising = false }, containerColor = Web.raised) {
@@ -341,6 +443,7 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
                 )
                 listOf(
                     "shortcuts" to "Shortcuts",
+                    "speeddial" to "Speed dial",
                     "quickpicks" to "Quick picks",
                     "mixes" to "Made for you",
                     "history" to "Jump back in",
@@ -360,6 +463,68 @@ fun HomeScreen(pc: PlayerConnection, nav: NavHostController) {
                 }
                 Spacer(Modifier.height(24.dp))
             }
+        }
+    }
+}
+
+/** The mockup's speed-dial tile gradients, cycled by grid position. */
+private val SD_GRADS = listOf(
+    listOf(Color(0xFF2C1A45), Color(0xFF6B3FA8)),
+    listOf(Color(0xFF451A38), Color(0xFFB4407E)),
+    listOf(Color(0xFF241634), Color(0xFF52356E)),
+    listOf(Color(0xFF3A1D33), Color(0xFF8A3C74)),
+    listOf(Color(0xFF35164A), Color(0xFF7C3EC2)),
+    listOf(Color(0xFF2A1230), Color(0xFF94356B)),
+)
+
+private fun sdInitials(title: String): String =
+    title.split(Regex("\\s+"))
+        .filter { w -> w.any { it.isLetterOrDigit() } }
+        .take(2)
+        .mapNotNull { it.firstOrNull()?.uppercase() }
+        .joinToString("")
+        .ifEmpty { "♪" }
+
+/** One speed-dial tile: cover art when the snapshot has it, initials on the
+ *  gradient when it doesn't, and the title on a scrim along the bottom. */
+@Composable
+private fun SpeedDialTile(song: Song, index: Int, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .height(114.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Brush.linearGradient(SD_GRADS[index % SD_GRADS.size]))
+            .clickable(onClick = onClick),
+    ) {
+        if (song.image.isNullOrBlank()) {
+            Text(
+                sdInitials(song.title),
+                fontSize = 40.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-1).sp,
+                color = Color.White.copy(alpha = 0.22f),
+                modifier = Modifier.align(Alignment.Center),
+            )
+        } else {
+            Artwork(song.image, Modifier.matchParentSize(), shape = RoundedCornerShape(8.dp))
+        }
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xD9050209)))
+                )
+                .padding(start = 10.dp, end = 10.dp, top = 26.dp, bottom = 8.dp),
+        ) {
+            Text(
+                song.title,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

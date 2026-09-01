@@ -149,6 +149,7 @@ class PlayerConnection(context: Context) {
             ctx.startsWith("mix/") -> "Daily Mix"
             ctx.startsWith("reco/") -> "Autoplay"
             ctx.startsWith("search/") -> "Search results"
+            ctx == MediaIds.SPEEDDIAL -> "Speed dial"
             ctx == MediaIds.LIKED -> "Liked Songs"
             ctx == MediaIds.HISTORY -> "Recently played"
             ctx == MediaIds.TRENDING -> "Trending"

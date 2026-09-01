@@ -5,19 +5,22 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// One-to-one with the web app's :root custom properties (public/styles.css).
+// One-to-one with the web app's :root custom properties (public/styles.css):
+// the pink/purple identity from design/mobile-redesign.
 object Web {
-    val bg = Color(0xFF000000)         // --bg
-    val panel = Color(0xFF121212)      // --panel
-    val raised = Color(0xFF181818)     // --raised
-    val raisedHover = Color(0xFF282828)// --raised-hover
-    val highlight = Color(0xFF2A2A2A)  // --highlight
+    val bg = Color(0xFF0B0712)         // --bg
+    val panel = Color(0xFF140D20)      // --panel
+    val raised = Color(0xFF1D1430)     // --raised
+    val raisedHover = Color(0xFF2B1F45)// --raised-hover
+    val highlight = Color(0xFF322550)  // --highlight
     val text = Color(0xFFFFFFFF)       // --text
-    val sub = Color(0xFFB3B3B3)        // --sub
-    val accent = Color(0xFF1DB954)     // --accent
-    val accentHover = Color(0xFF1ED760)// --accent-hover
-    val border = Color(0xFF292929)     // --border
-    val sheetMid = Color(0xFF16161A)   // np-sheet gradient midpoint
+    val sub = Color(0xFFB6A8C9)        // --sub
+    val accent = Color(0xFFF0559D)     // --accent
+    val accentHover = Color(0xFFFF6CAE)// --accent-hover
+    val accent2 = Color(0xFF9B6CF5)    // --accent-2
+    val border = Color(0xFF251A38)     // --border
+    val sheetMid = Color(0xFF160E22)   // np-sheet gradient midpoint
+    val onAccent = Color(0xFF14091D)   // dark ink the mockup sets on gradients
 }
 
 private val Colors = darkColorScheme(

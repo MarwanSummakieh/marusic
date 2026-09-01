@@ -46,7 +46,7 @@ import com.marusic.app.ui.theme.Web
  */
 enum class MediaKind(val label: String, val tint: Color, val icon: ImageVector) {
     Playlist("Playlist", Color(0xFFA06CF5), Icons.AutoMirrored.Rounded.QueueMusic),
-    Mix("Mix", Color(0xFF1ED760), Icons.Rounded.AutoAwesome),
+    Mix("Mix", Color(0xFFF0559D), Icons.Rounded.AutoAwesome),
     Single("Single", Color(0xFFF5B23C), Icons.Rounded.Album),
     Album("Album", Color(0xFF4A9DFF), Icons.Rounded.Album),
     Ep("EP", Color(0xFF2AD4C0), Icons.Rounded.Album),
@@ -291,13 +291,17 @@ fun AvatarButton(name: String, onClick: () -> Unit) {
         Modifier
             .size(32.dp)
             .clip(CircleShape)
-            .background(Web.accent)
+            .background(
+                androidx.compose.ui.graphics.Brush.linearGradient(
+                    listOf(Web.accent, Web.accent2)
+                )
+            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             name.trim().firstOrNull()?.uppercase() ?: "?",
-            color = Color.Black,
+            color = Web.onAccent,
             fontWeight = FontWeight.ExtraBold,
             fontSize = 15.sp,
         )
