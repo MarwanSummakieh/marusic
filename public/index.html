@@ -8,7 +8,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#121212">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <link rel="stylesheet" href="/styles.css?v=28">
+  <link rel="stylesheet" href="/styles.css?v=29">
 </head>
 <body>
   <div class="app">
@@ -18,7 +18,7 @@
         <span>Marusic</span>
       </a>
 
-      <!-- Home/Search/Discover/Library/Profile now live in the top tab bar; the
+      <!-- Home/Browse/Library/Profile now live in the top tab bar; the
            sidebar keeps only what the tabs don't cover. -->
       <nav class="nav">
         <a href="#/radio" data-nav="radio"><span class="nav-icon" data-icon="radio"></span><span class="nav-label">Radio</span></a>
@@ -69,7 +69,6 @@
           <!-- Searching happens in the field beside these tabs; this tab is the
                moods & genres catalogue that used to sit under an empty search -->
           <a href="#/browse" data-nav="browse" title="Browse"><span class="tt-icon" data-icon="grid"></span><span class="tt-label">Browse</span></a>
-          <a href="#/discover" data-nav="discover" title="Discover"><span class="tt-icon" data-icon="sparkle"></span><span class="tt-label">Discover</span></a>
           <a href="#/profile" data-nav="profile" title="Profile"><span class="tt-icon" data-icon="person"></span><span class="tt-label">Profile</span></a>
         </nav>
 
@@ -97,74 +96,97 @@
       <section id="view" class="view"></section>
     </main>
 
-    <aside class="queue-panel hidden" id="queue-panel">
-      <div class="queue-head">
-        <h3 id="queue-title">Queue</h3>
-        <span class="queue-head-actions">
-          <button id="btn-autoplay" class="pill-toggle" title="Keep playing similar songs when the queue ends">Autoplay</button>
-          <button id="btn-queue-close" class="icon-btn" data-icon="close"></button>
-        </span>
-      </div>
-      <div id="queue-list" class="queue-list"></div>
-    </aside>
-
-    <aside class="queue-panel hidden" id="lyrics-panel">
-      <div class="queue-head">
-        <h3>Lyrics</h3>
-        <button id="btn-lyrics-close" class="icon-btn" data-icon="close"></button>
-      </div>
-      <div id="lyrics-body" class="queue-list"></div>
-    </aside>
-
-    <!-- full-screen Now Playing sheet (phones: tap the mini player) -->
+    <!-- Now Playing, full screen on every size: the cover and transport on one
+         side, lyrics / queue / jam tabbed on the other. On phones the second
+         column collapses and those three open as the drawer at the bottom. -->
     <section class="np-sheet" id="np-sheet" aria-label="Now playing">
-      <div class="np-sheet-head" id="np-sheet-head">
-        <button id="np-sheet-close" class="icon-btn" title="Close" data-icon="chevronDown"></button>
-        <span class="np-sheet-label" id="np-sheet-label">Now playing</span>
-        <button id="np2-download" class="icon-btn" title="Download" data-icon="download"></button>
-      </div>
-      <div class="np2-art" id="np2-art">
-        <img id="np2-image" alt="" class="hidden">
-        <div id="np2-art-placeholder" class="np2-art-placeholder" data-icon="note"></div>
-      </div>
-      <div class="np2-meta">
-        <div class="np2-text">
-          <div id="np2-title" class="np2-title"></div>
-          <div id="np2-artist" class="np2-artist"></div>
+      <div class="np2-stage">
+        <div class="np-sheet-head" id="np-sheet-head">
+          <button id="np-sheet-close" class="icon-btn" title="Close" data-icon="chevronDown"></button>
+          <span class="np-sheet-label" id="np-sheet-label">Now playing</span>
+          <button id="np2-download" class="icon-btn" title="Download" data-icon="download"></button>
         </div>
-        <button id="np2-like" class="icon-btn like-btn" title="Save to Liked Songs"></button>
-      </div>
-      <div class="np2-progress">
-        <div class="progress-bar" id="np2-progress-bar">
-          <div class="progress-track">
-            <div class="progress-fill" id="np2-progress-fill"></div>
-            <div class="progress-knob" id="np2-progress-knob"></div>
+        <div class="np2-art" id="np2-art">
+          <img id="np2-image" alt="" class="hidden">
+          <div id="np2-art-placeholder" class="np2-art-placeholder" data-icon="note"></div>
+        </div>
+        <div class="np2-meta">
+          <div class="np2-text">
+            <div id="np2-title" class="np2-title"></div>
+            <div id="np2-artist" class="np2-artist"></div>
           </div>
+          <button id="np2-like" class="icon-btn like-btn" title="Save to Liked Songs"></button>
         </div>
-        <div class="np2-times"><span id="np2-time-cur">0:00</span><span id="np2-time-dur">0:00</span></div>
-      </div>
-      <div class="np2-controls">
-        <button id="np2-shuffle" class="icon-btn" title="Shuffle" data-icon="shuffle"></button>
-        <button id="np2-prev" class="icon-btn" title="Previous" data-icon="prev"></button>
-        <button id="np2-play" class="np2-play" title="Play"></button>
-        <button id="np2-next" class="icon-btn" title="Next" data-icon="next"></button>
-        <button id="np2-repeat" class="icon-btn" title="Repeat" data-icon="repeat"></button>
-      </div>
-      <!-- Queue and lyrics open *into* the sheet from here rather than throwing
-           you into a side panel, so both stay inside one-handed thumb reach. -->
-      <div class="np2-actions">
-        <button id="np2-lyrics" class="np2-action" title="Lyrics"><span data-icon="mic"></span>Lyrics</button>
-        <button id="np2-queue" class="np2-action" title="Queue"><span data-icon="queue"></span>Queue</button>
-        <button id="np2-jam" class="np2-action" title="Jam"><span data-icon="group"></span>Jam</button>
-        <button id="np2-cast" class="np2-action cast-nodevices" title="Cast"><span data-icon="cast"></span>Cast</button>
-      </div>
-      <div class="np2-drawer" id="np2-drawer" hidden>
-        <div class="np2-drawer-head">
-          <span id="np2-drawer-title">Queue</span>
-          <button id="np2-drawer-close" class="icon-btn" title="Close" data-icon="chevronDown"></button>
+        <div class="np2-progress">
+          <div class="progress-bar" id="np2-progress-bar">
+            <div class="progress-track">
+              <div class="progress-fill" id="np2-progress-fill"></div>
+              <div class="progress-knob" id="np2-progress-knob"></div>
+            </div>
+          </div>
+          <div class="np2-times"><span id="np2-time-cur">0:00</span><span id="np2-time-dur">0:00</span></div>
         </div>
-        <div class="np2-drawer-body" id="np2-drawer-body"></div>
+        <div class="np2-controls">
+          <button id="np2-shuffle" class="icon-btn" title="Shuffle" data-icon="shuffle"></button>
+          <button id="np2-prev" class="icon-btn" title="Previous" data-icon="prev"></button>
+          <button id="np2-play" class="np2-play" title="Play"></button>
+          <button id="np2-next" class="icon-btn" title="Next" data-icon="next"></button>
+          <button id="np2-repeat" class="icon-btn" title="Repeat" data-icon="repeat"></button>
+        </div>
+        <!-- phones: these open the drawer below. On desktop the same three are
+             already standing tabs in the side column, so only Cast is left. -->
+        <div class="np2-actions">
+          <button id="np2-lyrics" class="np2-action np2-action-tabbed" title="Lyrics"><span data-icon="mic"></span>Lyrics</button>
+          <button id="np2-queue" class="np2-action np2-action-tabbed" title="Queue"><span data-icon="queue"></span>Queue</button>
+          <button id="np2-jam" class="np2-action np2-action-tabbed" title="Jam"><span data-icon="group"></span>Jam</button>
+          <button id="np2-cast" class="np2-action cast-nodevices" title="Cast"><span data-icon="cast"></span>Cast</button>
+          <!-- desktop only: the full-screen player covers the transport bar,
+               and volume shouldn't need you to close it -->
+          <span class="np2-volume">
+            <button id="np2-mute" class="icon-btn" title="Mute"></button>
+            <input type="range" id="np2-volume" class="volume" min="0" max="100" value="80" title="Volume">
+          </span>
+        </div>
+        <div class="np2-drawer" id="np2-drawer" hidden>
+          <div class="np2-drawer-head">
+            <span id="np2-drawer-title">Queue</span>
+            <button id="np2-drawer-close" class="icon-btn" title="Close" data-icon="chevronDown"></button>
+          </div>
+          <div class="np2-drawer-body" id="np2-drawer-body"></div>
+        </div>
       </div>
+
+      <aside class="np2-side" id="np2-side">
+        <div class="np2-tabs" role="tablist">
+          <button class="np2-tab" role="tab" data-nptab="lyrics"><span data-icon="mic"></span>Lyrics</button>
+          <button class="np2-tab" role="tab" data-nptab="queue"><span data-icon="queue"></span>Queue</button>
+          <button class="np2-tab" role="tab" data-nptab="jam"><span data-icon="group"></span>Jam</button>
+        </div>
+
+        <div class="np2-pane" id="np2-pane-lyrics" role="tabpanel" hidden>
+          <div class="np2-pane-tools">
+            <span class="np2-pane-note" id="lyrics-source"></span>
+            <span class="np2-pane-tool-btns">
+              <label class="lp-sync"><input type="checkbox" id="lyrics-follow" checked> Follow</label>
+              <button id="lyrics-smaller" class="icon-btn" title="Smaller text">A−</button>
+              <button id="lyrics-bigger" class="icon-btn" title="Bigger text">A+</button>
+            </span>
+          </div>
+          <div id="lyrics-body" class="queue-list"></div>
+        </div>
+
+        <div class="np2-pane" id="np2-pane-queue" role="tabpanel" hidden>
+          <div class="np2-pane-tools">
+            <span class="np2-pane-note" id="queue-title">Queue</span>
+            <button id="btn-autoplay" class="pill-toggle" title="Keep playing similar songs when the queue ends">Autoplay</button>
+          </div>
+          <div id="queue-list" class="queue-list"></div>
+        </div>
+
+        <div class="np2-pane" id="np2-pane-jam" role="tabpanel" hidden>
+          <div id="jam-body" class="queue-list"></div>
+        </div>
+      </aside>
     </section>
 
     <!-- press-and-hold on the mini player: quick actions without expanding it -->
@@ -256,7 +278,6 @@
     <nav class="mobile-nav">
       <a href="#/home" data-mnav="home"><span class="mnav-icon" data-icon="home"></span><span class="mnav-label">Home</span></a>
       <a href="#/browse" data-mnav="browse"><span class="mnav-icon" data-icon="grid"></span><span class="mnav-label">Browse</span></a>
-      <a href="#/discover" data-mnav="discover"><span class="mnav-icon" data-icon="sparkle"></span><span class="mnav-label">Discover</span></a>
       <a href="#/library" data-mnav="library"><span class="mnav-icon" data-icon="library"></span><span class="mnav-label">Library</span></a>
       <a href="#/profile" data-mnav="profile"><span class="mnav-icon" data-icon="person"></span><span class="mnav-label">Profile</span></a>
     </nav>
@@ -311,7 +332,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=28"></script>
+  <script src="/app.js?v=30"></script>
   <!-- Google Cast sender SDK — after app.js so __onGCastApiAvailable exists.
        Loading it in a non-Cast browser (or offline) is a harmless no-op. -->
   <script src="https://www.gstatic.com/cast/sdk/libs/sender/v1/cast_sender.js?loadCastFramework=1"></script>

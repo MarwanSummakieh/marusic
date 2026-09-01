@@ -13,15 +13,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.PersonRemove
 import androidx.compose.material.icons.rounded.Speaker
 import androidx.compose.material.icons.rounded.Star
@@ -30,6 +32,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +53,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -60,6 +64,8 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.marusic.app.appContainer
 import com.marusic.app.data.JamPeek
+import com.marusic.app.data.JamSnapshot
+import com.marusic.app.playback.JamManager
 import com.marusic.app.ui.Artwork
 import com.marusic.app.ui.PlayerConnection
 import com.marusic.app.ui.ScreenTitle
@@ -67,14 +73,21 @@ import com.marusic.app.ui.SectionTitle
 import kotlinx.coroutines.launch
 
 /**
- * Shared listening. No jam: start one (seeded from whatever is playing) or
- * join by code. In a jam: code + members + host settings + the live queue.
- * Transport lives in the mini player / Now Playing, which are jam-aware.
+ * Shared listening — both kinds of it, behind one screen (see lib/jam.js):
+ *
+ *   Jam             everyone is in the same room, so one device makes sound
+ *                   and everyone else's phone is a synchronized remote.
+ *   Listen together everyone is somewhere else, so every device plays its own
+ *                   stream, held to the same moment of the same song.
+ *
+ * The kind is picked once, when the session starts, and fixed for its life:
+ * moving the audio out from under everyone mid-song is not a thing anyone
+ * asked for. Transport lives in the mini player / Now Playing, which are
+ * session-aware.
  */
 @Composable
 fun JamScreen(pc: PlayerConnection, nav: NavHostController) {
     val container = LocalContext.current.appContainer
-    val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
@@ -82,12 +95,7 @@ fun JamScreen(pc: PlayerConnection, nav: NavHostController) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        val jam = pc.jam
-        if (jam == null) {
-            NoJamContent(pc)
-        } else {
-            ActiveJamContent(pc)
-        }
+        if (pc.jam == null) NoSessionContent(pc) else ActiveSessionContent(pc)
         SnackbarHost(
             hostState = snackbar,
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -95,12 +103,65 @@ fun JamScreen(pc: PlayerConnection, nav: NavHostController) {
     }
 }
 
-// ------------------------------------------------------------- no jam ----
+// ------------------------------------------------------------- the copy ----
+
+/** Everything the two features say differently, in one table. */
+private class ModeCopy(
+    val title: String,
+    val noun: String,
+    val icon: ImageVector,
+    val blurb: String,
+    val start: String,
+    val startFrom: String,
+    val invited: String,
+    val join: String,
+    val joinBlurb: String,
+    val membersTitle: String,
+)
+
+private val SPEAKER_COPY = ModeCopy(
+    title = "Jam",
+    noun = "jam",
+    icon = Icons.Rounded.Groups,
+    blurb = "Everyone's in the same room. One device plays the music and everyone " +
+        "else's phone becomes a remote — same queue, no echo.",
+    start = "Start a jam",
+    startFrom = "Start a jam from what's playing",
+    invited = "invited you to a jam",
+    join = "Join the jam",
+    joinBlurb = "One device plays for the room — this one is a remote unless the " +
+        "host hands it the audio.",
+    membersTitle = "In the jam",
+)
+
+private val TOGETHER_COPY = ModeCopy(
+    title = "Listen together",
+    noun = "listen together",
+    icon = Icons.AutoMirrored.Rounded.VolumeUp,
+    blurb = "Everyone's somewhere else. Every device plays its own audio, held in " +
+        "sync to the same moment of the same song — so hop in a call and listen.",
+    start = "Start listening together",
+    startFrom = "Listen together from what's playing",
+    invited = "invited you to listen together",
+    join = "Join and listen",
+    joinBlurb = "The music plays on this device, in sync with everyone else's.",
+    membersTitle = "Listening together",
+)
+
+private fun copyFor(mode: String) =
+    if (mode == JamManager.MODE_TOGETHER) TOGETHER_COPY else SPEAKER_COPY
+
+// ---------------------------------------------------------- no session ----
 
 @Composable
-private fun NoJamContent(pc: PlayerConnection) {
+private fun NoSessionContent(pc: PlayerConnection) {
     val container = LocalContext.current.appContainer
     val scope = rememberCoroutineScope()
+
+    // the toggle only changes what you are about to start; a session's own
+    // kind is fixed once it exists
+    var mode by remember { mutableStateOf(container.jamMode) }
+    val copy = copyFor(mode)
 
     var code by remember { mutableStateOf("") }
     var peek by remember { mutableStateOf<JamPeek?>(null) }
@@ -108,24 +169,40 @@ private fun NoJamContent(pc: PlayerConnection) {
     var error by remember { mutableStateOf<String?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        ScreenTitle("Jam")
-        Text(
-            "Listen together in real time. One device is the speaker; everyone is the DJ.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
+        ScreenTitle("Listen with friends")
 
-        SectionTitle("Start a jam")
+        SectionTitle("Start")
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         ) {
             Column(Modifier.padding(16.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (option in listOf(JamManager.MODE_SPEAKER, JamManager.MODE_TOGETHER)) {
+                        val c = copyFor(option)
+                        FilterChip(
+                            selected = mode == option,
+                            onClick = {
+                                if (mode == option) return@FilterChip
+                                mode = option
+                                scope.launch { container.settings.setJamMode(option) }
+                            },
+                            label = { Text(c.title) },
+                            leadingIcon = { Icon(c.icon, null, Modifier.size(18.dp)) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    copy.blurb,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
                 val queue = pc.queueSongs
                 Text(
                     if (queue.isEmpty()) "Starts empty — anyone can add songs."
-                    else "Starts with your current queue (${queue.size} songs) and this phone as the speaker.",
+                    else "Starts with your current queue (${queue.size} songs).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -138,19 +215,21 @@ private fun NoJamContent(pc: PlayerConnection) {
                         scope.launch {
                             try {
                                 val (songs, index, posPlaying) = pc.jamSeed()
-                                container.jam.create(songs, index, posPlaying.first, posPlaying.second)
+                                container.jam.create(
+                                    songs, index, posPlaying.first, posPlaying.second, mode,
+                                )
                             } catch (e: Exception) {
-                                error = e.message ?: "Couldn't start the jam"
+                                error = e.message ?: "Couldn't start"
                             } finally {
                                 busy = false
                             }
                         }
                     },
-                ) { Text("Start jam") }
+                ) { Text(if (pc.queueSongs.isEmpty()) copy.start else copy.startFrom) }
             }
         }
 
-        SectionTitle("Join a jam")
+        SectionTitle("Join")
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -164,8 +243,13 @@ private fun NoJamContent(pc: PlayerConnection) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 peek?.let { p ->
+                    // the code decides the kind, not the toggle above
+                    val c = copyFor(p.mode)
                     Spacer(Modifier.height(10.dp))
-                    Text("${p.host}'s jam · ${p.members} listening", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "${p.host} ${c.invited} · ${p.members} in",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                     p.current?.let { cur ->
                         Text(
                             "${if (p.playing) "Playing" else "Paused"}: ${cur.title} — ${cur.artist}",
@@ -175,6 +259,11 @@ private fun NoJamContent(pc: PlayerConnection) {
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
+                    Text(
+                        c.joinBlurb,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 error?.let {
                     Spacer(Modifier.height(8.dp))
@@ -216,7 +305,7 @@ private fun NoJamContent(pc: PlayerConnection) {
                         },
                     ) {
                         if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        else Text("Join")
+                        else Text(peek?.let { copyFor(it.mode).join } ?: "Join")
                     }
                 }
             }
@@ -225,19 +314,48 @@ private fun NoJamContent(pc: PlayerConnection) {
     }
 }
 
-// --------------------------------------------------------- active jam ----
+// ------------------------------------------------------ active session ----
+
+/** One queue row, with the section heading it opens (null when it continues one). */
+private class QueueRow(val heading: String?, val index: Int)
+
+/**
+ * What people queued comes first, then what autoplay filled in — two sections,
+ * so it's obvious a new pick jumps ahead of the suggestions (lib/jam.js sorts
+ * the queue that way; `auto` marks the tail).
+ */
+private fun queueRows(jam: JamSnapshot): List<QueueRow> {
+    val rows = mutableListOf<QueueRow>()
+    val cur = jam.index
+    for (i in 0 until cur.coerceAtLeast(0)) {
+        rows += QueueRow(if (i == 0) "Played" else null, i)
+    }
+    if (cur in jam.queue.indices) rows += QueueRow("Now playing", cur)
+    val after = ((cur + 1).coerceAtLeast(0) until jam.queue.size).toList()
+    val queued = after.takeWhile { !jam.queue[it].auto }
+    val autos = after.drop(queued.size)
+    queued.forEachIndexed { n, i ->
+        rows += QueueRow(if (n == 0) (if (autos.isEmpty()) "Next up" else "Next in queue") else null, i)
+    }
+    autos.forEachIndexed { n, i ->
+        rows += QueueRow(if (n == 0) "Next up · Autoplay" else null, i)
+    }
+    return rows
+}
 
 @Composable
-private fun ActiveJamContent(pc: PlayerConnection) {
+private fun ActiveSessionContent(pc: PlayerConnection) {
     val container = LocalContext.current.appContainer
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val jam = pc.jam ?: return
+    val copy = copyFor(jam.mode)
+    val together = jam.mode == JamManager.MODE_TOGETHER
     var confirmEnd by remember { mutableStateOf(false) }
 
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
-            ScreenTitle("Jam") {
+            ScreenTitle(copy.title) {
                 if (jam.you.isHost) {
                     TextButton(onClick = { confirmEnd = true }) {
                         Text("End", color = MaterialTheme.colorScheme.error)
@@ -274,28 +392,49 @@ private fun ActiveJamContent(pc: PlayerConnection) {
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Rounded.Speaker, null,
-                            tint = if (jam.speakerOnline || pc.isJamSpeaker) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Text(
-                            when {
-                                pc.isJamSpeaker -> "Playing on this phone"
-                                jam.speakerOnline -> "Speaker connected elsewhere"
-                                else -> "Speaker offline — no audio anywhere"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 6.dp),
-                        )
-                    }
-                    if (jam.you.isHost && !pc.isJamSpeaker) {
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = { scope.launch { container.jam.playHere() } }) {
-                            Text("Play here instead")
+                    if (together) {
+                        // no speaker to be online or offline: every connected
+                        // device is its own
+                        val listening = jam.members.count { it.connected }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.VolumeUp, null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                "Playing on every device — " +
+                                    (if (listening == 1) "you're" else "$listening people are") +
+                                    " hearing this in sync. Voice chat is on you.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 6.dp),
+                            )
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Rounded.Speaker, null,
+                                tint = if (jam.speakerOnline || pc.isJamSpeaker) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                when {
+                                    pc.isJamSpeaker -> "Playing on this phone"
+                                    jam.speakerOnline -> "Speaker connected elsewhere"
+                                    else -> "Speaker offline — no audio anywhere"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 6.dp),
+                            )
+                        }
+                        if (jam.you.isHost && !pc.isJamSpeaker) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(onClick = { scope.launch { container.jam.playHere() } }) {
+                                Text("Play here instead")
+                            }
                         }
                     }
                 }
@@ -324,7 +463,7 @@ private fun ActiveJamContent(pc: PlayerConnection) {
             }
         }
 
-        item { SectionTitle("Listening (${jam.members.size})") }
+        item { SectionTitle("${copy.membersTitle} (${jam.members.size})") }
         itemsIndexed(jam.members, key = { _, m -> m.id }) { _, member ->
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -361,19 +500,28 @@ private fun ActiveJamContent(pc: PlayerConnection) {
         if (jam.queue.isEmpty()) {
             item {
                 Text(
-                    "Queue is empty — browse anywhere in the app and tap songs to add them.",
+                    "The queue is empty — browse anywhere in the app and tap songs to add them.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
         }
-        itemsIndexed(jam.queue, key = { i, s -> "$i${s.id}" }) { i, song ->
-            val isCurrent = i == jam.index
+        items(queueRows(jam), key = { "${it.index}${jam.queue[it.index].id}" }) { row ->
+            val song = jam.queue[row.index]
+            val isCurrent = row.index == jam.index
+            row.heading?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                )
+            }
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = jam.you.canControl) { scope.launch { container.jam.playAt(i) } }
+                    .clickable(enabled = jam.you.canControl) { scope.launch { container.jam.playAt(row.index) } }
                     .padding(horizontal = 16.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -396,8 +544,8 @@ private fun ActiveJamContent(pc: PlayerConnection) {
                     )
                 }
                 if (jam.you.canControl && !isCurrent) {
-                    IconButton(onClick = { scope.launch { container.jam.removeAt(i) } }) {
-                        Icon(Icons.Rounded.Close, "Remove from queue", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    IconButton(onClick = { scope.launch { container.jam.removeAt(row.index) } }) {
+                        Icon(Icons.Rounded.Close, "Remove from the queue", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -407,12 +555,13 @@ private fun ActiveJamContent(pc: PlayerConnection) {
     if (confirmEnd) {
         AlertDialog(
             onDismissRequest = { confirmEnd = false },
-            title = { Text("End the jam for everyone?") },
+            title = { Text("End this for everyone?") },
+            text = { Text("Everyone in the ${copy.noun} loses the queue and the music stops.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmEnd = false
                     scope.launch { container.jam.end() }
-                }) { Text("End jam", color = MaterialTheme.colorScheme.error) }
+                }) { Text("End", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmEnd = false }) { Text("Cancel") } },
         )
