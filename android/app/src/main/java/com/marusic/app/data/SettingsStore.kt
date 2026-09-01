@@ -28,6 +28,8 @@ class SettingsStore(private val context: Context) {
         /** Home rows the user switched off in "Customise" (web: homeRows pref). */
         val hiddenRows: Set<String>,
         val autoplay: Boolean,
+        /** Which kind of session the Jam screen offers first (web: jamMode pref). */
+        val jamMode: String,
     ) {
         val loggedIn: Boolean get() = baseUrl.isNotBlank() && !token.isNullOrBlank()
         fun rowVisible(id: String) = id !in hiddenRows
@@ -71,6 +73,11 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { it[AUTOPLAY] = on }
     }
 
+    /** Remembers the last kind of session started — "speaker" or "together". */
+    suspend fun setJamMode(mode: String) {
+        context.dataStore.edit { it[JAM_MODE] = mode }
+    }
+
     suspend fun setUserName(name: String) {
         context.dataStore.edit { it[USER_NAME] = name }
     }
@@ -95,6 +102,7 @@ class SettingsStore(private val context: Context) {
         deviceId = p[DEVICE_ID] ?: "",
         hiddenRows = p[HIDDEN_ROWS] ?: emptySet(),
         autoplay = p[AUTOPLAY] ?: true,
+        jamMode = p[JAM_MODE] ?: "speaker",
     )
 
     private companion object {
@@ -107,5 +115,6 @@ class SettingsStore(private val context: Context) {
         val DEVICE_ID = stringPreferencesKey("device_id")
         val HIDDEN_ROWS = stringSetPreferencesKey("hidden_home_rows")
         val AUTOPLAY = booleanPreferencesKey("autoplay")
+        val JAM_MODE = stringPreferencesKey("jam_mode")
     }
 }

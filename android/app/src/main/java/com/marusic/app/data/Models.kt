@@ -15,6 +15,8 @@ data class Song(
     val album: String = "",
     val duration: Int = 0,
     val image: String = "",
+    /** Queued by jam autoplay rather than picked by a person (lib/jam.js). */
+    val auto: Boolean = false,
 )
 
 @Serializable
@@ -266,6 +268,8 @@ data class JamYou(val id: Long = 0, val isHost: Boolean = false, val canControl:
 @Serializable
 data class JamSnapshot(
     val code: String = "",
+    /** "speaker" (Jam: one device sounds) or "together" (every device plays). */
+    val mode: String = "speaker",
     val hostId: Long = 0,
     val speakerId: String = "",
     val speakerOnline: Boolean = false,
@@ -277,6 +281,8 @@ data class JamSnapshot(
     val playing: Boolean = false,
     val pos: Double = 0.0,
     val at: Long = 0,
+    /** Server-time ms the current track runs out, or 0 when unknowable. */
+    val ends: Long = 0,
     val now: Long = 0,
 )
 
@@ -286,6 +292,7 @@ data class JamWrapper(val jam: JamSnapshot? = null)
 @Serializable
 data class JamPeek(
     val code: String = "",
+    val mode: String = "speaker",
     val host: String = "",
     val members: Int = 0,
     val current: Song? = null,
@@ -298,6 +305,7 @@ data class JamSyncEvent(
     val playing: Boolean = false,
     val pos: Double = 0.0,
     val at: Long = 0,
+    val ends: Long = 0,
     val now: Long = 0,
 )
 
@@ -307,6 +315,7 @@ data class JamNote(val type: String = "", val name: String = "", val left: Strin
 @Serializable
 data class JamMembersEvent(
     val hostId: Long = 0,
+    val mode: String = "speaker",
     val speakerId: String = "",
     val speakerOnline: Boolean = false,
     val members: List<JamMember> = emptyList(),
@@ -323,6 +332,9 @@ data class JamQueueEvent(
 
 @Serializable
 data class JamSettingsEvent(val settings: JamSettings = JamSettings())
+
+@Serializable
+data class ServerTime(val now: Long = 0)
 
 // ---- request bodies ----
 
@@ -375,6 +387,8 @@ data class JamCreateBody(
     val pos: Double = 0.0,
     val playing: Boolean = false,
     val deviceId: String = "",
+    // omitted when "speaker" (encodeDefaults is off), which is the server default
+    val mode: String = "speaker",
 )
 
 @Serializable

@@ -91,7 +91,8 @@ class PlaybackService : MediaLibraryService() {
             .setSessionActivity(sessionActivity)
             .build()
 
-        // jam speaker sync drives this player directly while a jam is active
+        // jam sync drives this player directly whenever this device is one of
+        // the ones making sound (the speaker, or any device in listen together)
         container.jam.player = player
     }
 
@@ -120,8 +121,9 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_READY) reportPendingHistory()
-            // single-item jam playback: the speaker reports track end and the
-            // server's sync event loads the next song
+            // Single-item shared playback: the server schedules the track
+            // boundary itself, so this is only a fallback report — JamManager
+            // drops it unless the boundary is actually due.
             if (playbackState == Player.STATE_ENDED) container.jam.notifyTrackEnded()
         }
     }
@@ -162,7 +164,7 @@ class PlaybackService : MediaLibraryService() {
     /** Autoplay: when the last queue item starts, append its recommendations. */
     private fun maybeExtendQueue() {
         if (!container.autoplay) return
-        if (container.jam.active) return // jams refill server-side
+        if (container.jam.active) return // shared sessions refill server-side
         if (player.currentMediaItemIndex < player.mediaItemCount - 1) return
         val current = player.currentMediaItem ?: return
         val (vid, _) = MediaIds.parseSong(current.mediaId) ?: return

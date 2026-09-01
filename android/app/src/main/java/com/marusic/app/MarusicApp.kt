@@ -43,6 +43,10 @@ class AppContainer(context: Context) {
     @Volatile var autoplay: Boolean = true
         private set
 
+    /** Last kind of shared session started here — seeds the Jam screen toggle. */
+    @Volatile var jamMode: String = "speaker"
+        private set
+
     init {
         // One blocking read of a tiny prefs file: both the service and the UI
         // may fire requests immediately after process start.
@@ -62,6 +66,7 @@ class AppContainer(context: Context) {
         api.bearer = s.token
         quality = s.quality
         autoplay = s.autoplay
+        jamMode = s.jamMode
         if (hadToken != null && s.token == null) {
             repo.invalidate() // signed out
             scope.launch { jam.leave() }

@@ -26,11 +26,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * The phone UI's handle on PlaybackService — and, when a jam is active, on
- * the jam instead: transport commands route to the jam API (the server syncs
- * every device, including this one if it's the speaker), and the displayed
- * track/position derive from jam state so remotes render correctly while
- * staying silent. Mirrors how the web player behaves inside a jam.
+ * The phone UI's handle on PlaybackService — and, when a shared session is
+ * active, on that instead: transport commands route to the jam API (the server
+ * syncs every device), and the displayed track/position derive from session
+ * state so remotes render correctly while staying silent. In listen together
+ * every device renders the audio, so nothing here is a remote — the same fork
+ * the web player makes.
  */
 class PlayerConnection(context: Context) {
     private val appContext = context.applicationContext
@@ -64,7 +65,15 @@ class PlayerConnection(context: Context) {
         private set
 
     val inJam: Boolean get() = jam != null
+
+    /** Speaker mode: is this phone the one device making sound? */
     val isJamSpeaker: Boolean get() = container.jam.isSpeaker
+
+    /** Does this phone render the audio? In listen together, every device does. */
+    val jamPlaysAudio: Boolean get() = container.jam.playsAudio
+
+    /** "Listen together" rather than a same-room jam. */
+    val isTogether: Boolean get() = container.jam.isTogether
 
     // ---- displayed state (jam-aware) ----
 
@@ -92,8 +101,8 @@ class PlayerConnection(context: Context) {
         get() {
             jam?.let { j ->
                 val song = j.queue.getOrNull(j.index)
-                // the speaker's player knows the real duration; remotes use metadata
-                if (isJamSpeaker && durationMsLocal > 0) return durationMsLocal
+                // a device that plays knows the real duration; remotes use metadata
+                if (jamPlaysAudio && durationMsLocal > 0) return durationMsLocal
                 return (song?.duration ?: 0) * 1000L
             }
             return durationMsLocal
@@ -101,7 +110,7 @@ class PlayerConnection(context: Context) {
 
     fun positionMs(): Long {
         jam?.let { j ->
-            return if (isJamSpeaker && controller != null && durationMsLocal > 0) {
+            return if (jamPlaysAudio && controller != null && durationMsLocal > 0) {
                 controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
             } else {
                 (container.jam.positionSec(j) * 1000).toLong().coerceAtLeast(0L)
@@ -133,7 +142,7 @@ class PlayerConnection(context: Context) {
      * uppercase at the top of the Now Playing sheet.
      */
     fun contextLabel(): String {
-        jam?.let { return "Jam · ${it.code}" }
+        jam?.let { return "${if (isTogether) "Listen together" else "Jam"} · ${it.code}" }
         val ctx = currentMediaId?.let { MediaIds.parseSong(it)?.second } ?: return "Now playing"
         return when {
             ctx.startsWith("station/") -> "${ctx.removePrefix("station/")} Radio"
