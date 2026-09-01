@@ -35,18 +35,22 @@ Range support so seeking works.
   with **typeahead suggestions**
 - **Artist pages** — top songs, albums, singles & EPs, and "fans also like";
   artist names are clickable everywhere, and you can **follow** artists
-- **Lyrics** panel for the current track (YT Music lyrics)
+- **Lyrics** for the current track (YT Music lyrics), time-synced: the line
+  you're on is highlighted, and clicking a line seeks to it
 - **Full player**: play/pause, next/prev, seek, volume, shuffle, repeat (off/all/one)
-- **Full-screen Now Playing on phones** — tap the mini player for big artwork,
-  a real seek bar, all controls, and lyrics/queue as bottom sheets; swipe down
-  to dismiss
+- **Full-screen Now Playing** — the cover and transport on one side, lyrics /
+  queue / jam as tabs down the other. On phones tap the mini player for the
+  same screen with those three as bottom sheets; swipe down to dismiss
+- **Artwork at the size it's drawn** — YT Music hands out 60px thumbnails, so
+  every cover asks for the resolution its box actually needs (and 2x on
+  retina) instead of upscaling
 - **Autoplay** — when the queue runs out, related songs keep playing
-  (toggle in the queue panel)
+  (toggle in the player's queue tab)
 - **Playback survives reloads** — the queue, current track, and position are
   restored (paused) when you come back
 - **Gapless-ish transitions** — the next track's stream URL is resolved in the
   background while the current one plays
-- **Queue**: add to queue, view/jump within the queue panel
+- **Queue**: add to queue, view/jump within the player's queue tab
 - **Playlists**: create, rename, delete, add/remove songs, **drag to reorder**,
   **share with other members** (revocable links), **export/import JSON**, and
   save copies of public YT Music playlists
@@ -317,6 +321,15 @@ session for a long-lived **device token** (`POST /api/device/token`) sent as
 `Authorization: Bearer …` on every request, including `/api/stream`. Device
 tokens survive password changes and are revocable per device
 (`GET`/`DELETE /api/device/tokens`). Sign out revokes the token.
+
+Shared listening works on the phone the same way it does on the web, both
+kinds of it: a **jam** (one device makes sound, the rest are synchronized
+remotes — the host can hand the audio to this phone with "Play here") and
+**listen together** (every device plays its own stream, aligned to the server
+clock). The kind is chosen when the session starts. The app holds its clock
+offset with round trips to `/api/jam/time` and places the playhead once per
+track boundary rather than chasing the server mid-song, which is what keeps
+two phones in a call actually together.
 
 Build (needs JDK 17 + Android SDK; or just open `android/` in Android
 Studio):

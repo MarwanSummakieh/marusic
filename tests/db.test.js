@@ -158,7 +158,7 @@ test("saved albums + followed artists toggle", () => {
 
   const lib = db.getLibrary(u.id);
   assert.deepEqual(Object.keys(lib).sort(),
-    ["albums", "artists", "history", "liked", "playlists", "saves"]);
+    ["albums", "artists", "hidden", "history", "liked", "playlists", "saves"]);
 });
 
 test("saves are a separate shelf from liked and playlists", () => {

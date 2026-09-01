@@ -989,30 +989,7 @@ img { -webkit-user-drag: none; user-select: none; }
 .volume:hover::-webkit-slider-thumb { opacity: 1; }
 .volume:hover { background: linear-gradient(to right, var(--accent) var(--vol, 80%), rgba(var(--ink), .30) var(--vol, 80%)); }
 
-/* ---------------- queue panel ---------------- */
-.queue-panel {
-  position: fixed;
-  right: var(--gap);
-  top: var(--gap);
-  bottom: calc(var(--player-h) + var(--gap) * 2);
-  width: 360px;
-  background: var(--panel);
-  border-radius: 8px;
-  z-index: 90; /* above the Now Playing sheet, so Lyrics/Queue open over it */
-  display: flex;
-  flex-direction: column;
-  box-shadow: -8px 0 24px rgba(var(--paper), .50);
-}
-
-.queue-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px 8px;
-}
-
-.queue-head h3 { font-size: 16px; font-weight: 800; }
-
+/* ---------------- queue list (a tab of the Now Playing player) ---------------- */
 .queue-list { overflow-y: auto; padding: 8px 12px 16px; flex: 1; }
 
 .queue-section {
@@ -1446,8 +1423,7 @@ img { -webkit-user-drag: none; user-select: none; }
   .collection-header .ch-art-liked svg { width: 56px; height: 56px; }
   .ch-title { font-size: clamp(26px, 9vw, 40px); letter-spacing: -1px; }
 
-  /* queue + popover + modal fit the viewport */
-  .queue-panel { left: var(--gap); right: var(--gap); width: auto; }
+  /* popover + modal fit the viewport */
   .popover { max-width: calc(100vw - 24px); }
   .modal { width: min(360px, calc(100vw - 24px)); }
 
@@ -1568,8 +1544,7 @@ img { -webkit-user-drag: none; user-select: none; }
 .suggest-chip:hover { background: rgba(var(--ink), .14); border-color: rgba(var(--ink), .20); }
 .suggest-chip svg { width: 13px; height: 13px; color: var(--sub); flex-shrink: 0; }
 
-/* queue header: autoplay pill */
-.queue-head-actions { display: flex; align-items: center; gap: 8px; }
+/* queue tab: autoplay pill */
 .pill-toggle {
   border: 1px solid rgba(var(--ink), .17);
   border-radius: 14px;
@@ -1582,15 +1557,8 @@ img { -webkit-user-drag: none; user-select: none; }
 .pill-toggle:hover { color: var(--text); border-color: rgba(var(--ink), .40); }
 .pill-toggle.on { color: var(--accent); border-color: var(--accent); }
 
-/* lyrics panel */
-.lyrics-title {
-  color: var(--sub);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 10px 12px 2px;
-}
+/* lyrics: the phone drawer draws a plain block, the player and the pop-up
+   draw a line at a time (.lp-line) */
 .lyrics-text {
   white-space: pre-wrap;
   font-size: 16px;
@@ -1598,7 +1566,6 @@ img { -webkit-user-drag: none; user-select: none; }
   line-height: 1.9;
   padding: 10px 12px 16px;
 }
-.lyrics-source { color: var(--sub); font-size: 12px; padding: 0 12px 20px; }
 
 /* drag-to-reorder */
 .track[draggable="true"] { user-select: none; }
@@ -1624,12 +1591,6 @@ body { -webkit-tap-highlight-color: transparent; }
   inset: 0;
   z-index: 80;
   display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding:
-    calc(14px + env(safe-area-inset-top, 0px))
-    24px
-    calc(28px + env(safe-area-inset-bottom, 0px));
   background:
     linear-gradient(180deg, var(--np-accent, #333) -10%, #16161a 55%, var(--panel) 100%);
   transform: translateY(100%);
@@ -1641,6 +1602,20 @@ body { -webkit-tap-highlight-color: transparent; }
   transform: translateY(0);
   visibility: visible;
   transition: transform .32s cubic-bezier(.2, .8, .2, 1);
+}
+
+/* the cover-and-transport column; the tabbed side panel sits next to it */
+.np2-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding:
+    calc(14px + env(safe-area-inset-top, 0px))
+    24px
+    calc(28px + env(safe-area-inset-bottom, 0px));
 }
 
 .np-sheet-head {
@@ -1754,6 +1729,8 @@ body { -webkit-tap-highlight-color: transparent; }
 .np2-action:active, .np2-action:hover { color: var(--text); }
 .np2-action svg { width: 18px; height: 18px; }
 .np2-action.casting { color: var(--accent); }
+/* phones have hardware volume keys; the slider is a desktop affordance */
+.np2-volume { display: none; }
 /* cast-capable browser but no device discovered (yet) — dimmed, still clickable */
 .cast-nodevices { opacity: 0.45; }
 /* output menu: the row for whatever is sounding right now */
@@ -1761,27 +1738,9 @@ body { -webkit-tap-highlight-color: transparent; }
 .popover-item .out-model { color: var(--sub); font-size: 11px; margin-left: 4px; }
 
 @media (max-width: 640px) {
-  /* queue + lyrics become bottom sheets that sit above the Now Playing sheet */
-  .queue-panel {
-    top: auto;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: auto;
-    height: 72vh;
-    z-index: 90;
-    border-radius: 16px 16px 0 0;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-    animation: sheet-up .28s cubic-bezier(.2, .8, .2, 1);
-  }
   .mobile-nav { padding-top: 6px; }
   /* pressed feedback on touch rows */
   .track:active, .queue-item:active, .card:active, .lib-row:active { background: rgba(var(--ink), .12); }
-}
-
-@keyframes sheet-up {
-  from { transform: translateY(40%); opacity: .6; }
-  to { transform: translateY(0); opacity: 1; }
 }
 
 /* phone home: brand in the topbar (the sidebar logo is hidden on phones) */
@@ -1803,20 +1762,109 @@ body { -webkit-tap-highlight-color: transparent; }
 /* the loaded player invites a click to expand */
 .player:not(.is-idle) .player-left { cursor: pointer; }
 
-/* desktop: the sheet becomes a Spotify-style Now Playing side panel that
-   slides in from the right and leaves the player bar usable */
+/* ---------------- the tabbed side column ----------------
+   Lyrics, queue and the jam used to be three narrow panels that slid over the
+   page from the right, each hiding the other two and leaving the cover the
+   size of a stamp. They're tabs of one full-screen player now. */
+.np2-side { display: none; }   /* phones use the drawer instead — see below */
+
+.np2-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 14px 14px 6px;
+  flex-shrink: 0;
+}
+
+.np2-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 700;
+  transition: background .15s, color .15s;
+}
+
+.np2-tab:hover { color: var(--text); background: rgba(var(--ink), .07); }
+.np2-tab.on { color: var(--text); background: rgba(var(--ink), .13); }
+.np2-tab svg { width: 16px; height: 16px; }
+/* a live session earns a dot on its tab, so you can see it from the lyrics */
+.np2-tab.live::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.np2-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.np2-pane[hidden] { display: none; }
+
+.np2-pane-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 20px 8px;
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.np2-pane-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np2-pane-tool-btns { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.np2-pane-tool-btns .icon-btn { font-size: 12px; font-weight: 700; padding: 4px 6px; }
+.np2-pane-tool-btns .lp-sync { font-weight: 700; margin-right: 4px; }
+.np2-pane-tool-btns .lp-sync input { accent-color: var(--accent); }
+
+/* the lyric lines want more air here than in a queue list */
+#lyrics-body { line-height: 1.9; padding: 2px 20px 32px; scroll-behavior: smooth; }
+#lyrics-body .lp-line { font-weight: 600; }
+
+/* desktop: the player takes the whole screen, cover on the left and the
+   lyrics / queue / jam tabs down the right */
 @media (min-width: 641px) {
-  .np-sheet {
-    inset: var(--gap) var(--gap) calc(var(--player-h) + var(--gap) * 2) auto;
-    width: 420px;
-    max-width: calc(100vw - 2 * var(--gap));
-    border-radius: 8px;
-    padding: 16px 24px 24px;
-    box-shadow: -16px 0 48px rgba(var(--paper), .50);
-    transform: translateX(105%);
+  .np2-stage { padding: 18px 32px 28px; }
+  /* the transport shouldn't stretch to 1600px just because the window does */
+  .np-sheet-head, .np2-meta, .np2-progress, .np2-controls, .np2-actions {
+    width: 100%;
+    max-width: 620px;
+    margin-inline: auto;
   }
-  .np-sheet.open { transform: translateX(0); }
-  .np2-art img, .np2-art-placeholder { width: min(340px, 38vh); }
+  /* Height-driven so the cover can never grow taller than the gap left for
+     it and slide under the title: it takes the room the transport doesn't
+     want, stays square, and gets bigger with the window. */
+  .np2-art img, .np2-art-placeholder {
+    width: auto;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+  }
+  /* those three are standing tabs in the side column here */
+  .np2-action-tabbed, .np2-drawer { display: none !important; }
+  .np2-actions { justify-content: center; gap: 18px; }
+  .np2-volume { display: flex; align-items: center; gap: 8px; }
+  .np2-volume .volume { width: 110px; }
+
+  .np2-side {
+    display: flex;
+    flex-direction: column;
+    width: clamp(320px, 30vw, 460px);
+    flex-shrink: 0;
+    background: rgba(var(--paper), .38);
+    border-left: 1px solid rgba(var(--ink), .10);
+    backdrop-filter: blur(24px);
+  }
+}
+
+/* wide enough for the cover to breathe: give the side column more room */
+@media (min-width: 1400px) {
+  .np2-side { width: clamp(400px, 27vw, 520px); }
 }
 
 /* ---------------- jam sessions ---------------- */
@@ -2013,6 +2061,50 @@ body { -webkit-tap-highlight-color: transparent; }
   flex-wrap: wrap;
 }
 .jam-leave-row .btn-ghost { border: 1px solid var(--border); border-radius: 999px; }
+
+/* ---- the jam as a tab of the player ----
+   The same session, in a column: everything the page shows, minus the room
+   the page has to spread it out in. */
+.jam-pane, .jam-pane-empty { display: flex; flex-direction: column; gap: 10px; padding: 4px 4px 12px; }
+
+.jam-pane-empty {
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding-top: 28px;
+}
+.jam-pane-empty h3 { font-size: 19px; font-weight: 800; }
+.jam-pane-empty .jam-hero-icon { width: 64px; height: 64px; }
+.jam-pane-empty .jam-hero-icon svg { width: 28px; height: 28px; }
+.jam-pane-empty .jam-join-row { width: 100%; }
+
+.jam-pane-code {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+  padding: 16px 12px;
+  border-radius: 10px;
+  background: rgba(var(--ink), .06);
+}
+.jam-pane-code .jam-code { font-size: 32px; letter-spacing: 7px; margin: 2px 0 8px; }
+.jam-pane-copy { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.jam-pane-copy .btn-solid, .jam-pane-copy .btn-ghost { padding: 7px 14px; font-size: 13px; }
+
+.jam-pane .jam-speaker-row { margin: 0; flex-wrap: wrap; font-size: 13px; }
+.jam-pane .jam-setting { padding: 6px 4px; max-width: none; }
+.jam-pane .jam-leave-row { margin: 10px 0 4px; }
+.jam-pane .queue-section { padding: 10px 4px 2px; }
+
+.jam-pane-link {
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: center;
+  padding: 6px;
+}
+.jam-pane-link:hover { color: var(--text); text-decoration: underline; }
 
 @media (max-width: 640px) {
   .jam-code { font-size: 34px; letter-spacing: 7px; }
@@ -2427,97 +2519,6 @@ body { -webkit-tap-highlight-color: transparent; }
 .row-tool { display: flex; color: var(--sub); padding: 4px; border-radius: 4px; }
 .row-tool:hover { color: var(--text); background: rgba(var(--ink), .10); }
 .row-tool svg { width: 16px; height: 16px; }
-
-/* ==========================================================================
-   Discover feed
-   ========================================================================== */
-.discover-head { padding-top: 8px; }
-
-.discover-feed {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  height: calc(100vh - 340px);
-  min-height: 420px;
-  overflow-y: auto;
-  scroll-snap-type: y mandatory;
-  padding: 4px 0 24px;
-  scrollbar-width: none;
-}
-.discover-feed::-webkit-scrollbar { display: none; }
-
-.disc-card {
-  position: relative;
-  flex: 0 0 auto;
-  height: 100%;
-  min-height: 420px;
-  scroll-snap-align: center;
-  border-radius: 14px;
-  overflow: hidden;
-  background: var(--raised);
-  display: grid;
-  place-items: center;
-}
-.disc-art { position: absolute; inset: 0; }
-.disc-art .disc-img, .disc-art .art-placeholder {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  filter: blur(1px) brightness(.55);
-  transform: scale(1.06);
-}
-.disc-card.in-view .disc-img { filter: blur(0) brightness(.62); }
-
-.disc-play {
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 76px;
-  height: 76px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: #000;
-  display: grid;
-  place-items: center;
-  opacity: 0;
-  transition: opacity .18s, transform .18s;
-}
-.disc-play svg { width: 30px; height: 30px; }
-.disc-card:hover .disc-play, .disc-card.in-view .disc-play { opacity: 1; }
-.disc-play:hover { transform: scale(1.07); }
-
-.disc-info {
-  position: absolute;
-  left: 20px;
-  right: 88px;
-  bottom: 20px;
-  color: #fff;
-  text-shadow: 0 2px 12px rgba(0, 0, 0, .8);
-}
-.disc-title { font-size: 21px; font-weight: 800; }
-.disc-artist { opacity: .85; }
-
-.disc-rail {
-  position: absolute;
-  right: 16px;
-  bottom: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.disc-act {
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, .45);
-  color: #fff;
-  display: grid;
-  place-items: center;
-  backdrop-filter: blur(6px);
-}
-.disc-act svg { width: 21px; height: 21px; }
-.disc-act:hover { background: rgba(0, 0, 0, .65); }
-.disc-act.on { color: var(--accent-hover); }
 
 /* ==========================================================================
    Saves, smart playlists
@@ -3030,9 +3031,6 @@ body.library-full .app { grid-template-columns: minmax(0, 1fr); grid-template-ar
 
   .stat { flex-basis: calc(50% - 5px); }
   .set-row { flex-direction: column; align-items: flex-start; gap: 10px; }
-
-  .discover-feed { height: calc(100vh - 300px); }
-  .disc-card { min-height: 340px; }
 
   .bulk-bar {
     left: 8px;

@@ -372,7 +372,7 @@ fun MiniPlayer(pc: PlayerConnection, onOpen: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (pc.inJam) {
                         Text(
-                            "JAM",
+                            if (pc.isTogether) "TOGETHER" else "JAM",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary,
